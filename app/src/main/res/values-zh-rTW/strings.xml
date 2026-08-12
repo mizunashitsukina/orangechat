@@ -1166,5 +1166,6 @@
   <string name="system_tools_security_warning_action">查看免責聲明</string>
 
   <string name="plugin_security_banner">⚠ 插件可執行網路請求並存取您已授權的系統資料。請僅從可信來源安裝插件。</string>
-  <string name="web_server_security_warning_no_jwt">⚠ 未啟用 JWT 鑒權或密碼為空。目前任何可存取該位址的人都能讀取您的對話記錄，強烈建議立即設定密碼並開啟 JWT。</string>
+    <string name="web_server_security_warning_no_jwt">區域網路存取必須啟用 JWT 鑒權並設定非空密碼；完成設定前，伺服器不會監聽區域網路介面。</string>
+    <string name="web_server_security_warning_empty_password">JWT 鑒權必須設定非空密碼，完成設定前無法啟動 Web Server。</string>
 </resources>

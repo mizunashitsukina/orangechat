@@ -1232,5 +1232,6 @@
   <string name="system_tools_security_warning_action">View disclaimer</string>
 
   <string name="plugin_security_banner">⚠ Plugins can make network requests and access system data you have authorized. Only install plugins from trusted sources.</string>
-  <string name="web_server_security_warning_no_jwt">⚠ JWT authentication is not enabled or the password is empty. Anyone who can access this address can read your conversation records. It is strongly recommended to set a password and enable JWT immediately.</string>
+    <string name="web_server_security_warning_no_jwt">LAN access requires JWT authentication and a non-empty password. The server will not listen on the local network until both are configured.</string>
+    <string name="web_server_security_warning_empty_password">JWT authentication requires a non-empty password before the web server can start.</string>
 </resources>

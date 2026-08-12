@@ -65,10 +65,12 @@ jobs:
               -validity 10000
           fi
 
-      - name: Run request logging regression test
+      - name: Run security regression tests
         run: |
           chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --tests "me.rerere.rikkahub.data.ai.RequestLoggingInterceptorTest"
+          ./gradlew :app:testDebugUnitTest \
+            --tests "me.rerere.rikkahub.data.ai.RequestLoggingInterceptorTest" \
+            --tests "me.rerere.rikkahub.web.WebServerSecurityPolicyTest"
 
       - name: Assemble Debug APK
         run: |

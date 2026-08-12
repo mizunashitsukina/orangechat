@@ -42,6 +42,7 @@ import me.rerere.rikkahub.data.service.ProactiveMessageService
 import me.rerere.rikkahub.data.service.SupabaseSyncService
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.service.WebServerService
+import me.rerere.rikkahub.web.evaluateWebServerSecurity
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
 import org.koin.android.ext.android.get
@@ -247,6 +248,15 @@ class RikkaHubApp : Application() {
                 delay(500)
                 val settings = get<SettingsStore>().settingsFlowRaw.first()
                 if (settings.webServerEnabled) {
+                    val securityDecision = evaluateWebServerSecurity(
+                        requestedLocalhostOnly = settings.webServerLocalhostOnly,
+                        jwtEnabled = settings.webServerJwtEnabled,
+                        accessPassword = settings.webServerAccessPassword,
+                    )
+                    if (!securityDecision.canStart) {
+                        Log.w(TAG, "Web server restore rejected by security policy")
+                        return@launch
+                    }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         ContextCompat.checkSelfPermission(
                             this@RikkaHubApp,
@@ -257,7 +267,7 @@ class RikkaHubApp : Application() {
                         return@launch
                     }
                     if (Build.VERSION.SDK_INT >= 37 &&
-                        !settings.webServerLocalhostOnly &&
+                        !securityDecision.effectiveLocalhostOnly &&
                         ContextCompat.checkSelfPermission(
                             this@RikkaHubApp,
                             android.Manifest.permission.ACCESS_LOCAL_NETWORK
@@ -269,12 +279,11 @@ class RikkaHubApp : Application() {
                     val intent = Intent(this@RikkaHubApp, WebServerService::class.java).apply {
                         action = WebServerService.ACTION_START
                         putExtra(WebServerService.EXTRA_PORT, settings.webServerPort)
-                        putExtra(WebServerService.EXTRA_LOCALHOST_ONLY, settings.webServerLocalhostOnly)
                     }
                     startForegroundService(intent)
                 }
             }.onFailure {
-                Log.e(TAG, "startWebServerIfEnabled failed", it)
+                Log.e(TAG, "Web server restore failed: ${it.javaClass.simpleName}")
             }
         }
     }

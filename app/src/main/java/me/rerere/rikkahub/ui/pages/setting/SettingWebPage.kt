@@ -72,6 +72,8 @@ import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
 import me.rerere.rikkahub.web.WebServerManager
+import me.rerere.rikkahub.web.WebServerSecurityIssue
+import me.rerere.rikkahub.web.evaluateWebServerSecurity
 import org.koin.compose.koinInject
 
 @Composable
@@ -86,6 +88,8 @@ fun SettingWebPage() {
     val clipboardManager = LocalClipboardManager.current
     val toaster = LocalToaster.current
     val copiedText = stringResource(R.string.copied)
+    val lanAuthenticationRequiredText = stringResource(R.string.web_server_security_warning_no_jwt)
+    val jwtPasswordRequiredText = stringResource(R.string.web_server_security_warning_empty_password)
     var portText by remember(settings.webServerPort) {
         mutableStateOf(settings.webServerPort.toString())
     }
@@ -113,10 +117,23 @@ fun SettingWebPage() {
     var showPublicRiskDialog by remember { mutableStateOf(false) }
 
     fun startWebServer() {
+        val securityDecision = evaluateWebServerSecurity(
+            requestedLocalhostOnly = settings.webServerLocalhostOnly,
+            jwtEnabled = settings.webServerJwtEnabled,
+            accessPassword = settings.webServerAccessPassword,
+        )
+        if (!securityDecision.canStart || securityDecision.effectiveLocalhostOnly != settings.webServerLocalhostOnly) {
+            toaster.show(
+                when (securityDecision.issue) {
+                    WebServerSecurityIssue.JWT_PASSWORD_REQUIRED -> jwtPasswordRequiredText
+                    else -> lanAuthenticationRequiredText
+                }
+            )
+            return
+        }
         val intent = Intent(context, WebServerService::class.java).apply {
             action = WebServerService.ACTION_START
             putExtra(WebServerService.EXTRA_PORT, settings.webServerPort)
-            putExtra(WebServerService.EXTRA_LOCALHOST_ONLY, settings.webServerLocalhostOnly)
         }
         context.startForegroundService(intent)
         scope.launch {
@@ -346,11 +363,31 @@ fun SettingWebPage() {
                             )
                         },
                     )
-                    if (!settings.webServerJwtEnabled || settings.webServerAccessPassword.isBlank()) {
+                    if (!settings.webServerLocalhostOnly &&
+                        (!settings.webServerJwtEnabled || settings.webServerAccessPassword.isBlank())
+                    ) {
                         item(
                             headlineContent = {
                                 Text(
                                     text = stringResource(R.string.web_server_security_warning_no_jwt),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            },
+                        )
+                    }
+                    serverState.securityIssue?.let { securityIssue ->
+                        item(
+                            headlineContent = {
+                                Text(
+                                    text = when (securityIssue) {
+                                        WebServerSecurityIssue.LAN_AUTH_REQUIRED -> {
+                                            lanAuthenticationRequiredText
+                                        }
+
+                                        WebServerSecurityIssue.JWT_PASSWORD_REQUIRED -> {
+                                            jwtPasswordRequiredText
+                                        }
+                                    },
                                     color = MaterialTheme.colorScheme.error,
                                 )
                             },
