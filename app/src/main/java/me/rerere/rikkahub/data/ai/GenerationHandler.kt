@@ -256,7 +256,7 @@ class GenerationHandler(
                 toolsToProcess = updatedTools
             } else {
                 // Resuming after user interaction - use the resumable tools directly.
-                    Log.i(TAG, "AI operation resumed: generateText")
+                Log.i(TAG, "AI operation resumed: generateText")
                 toolsToProcess = messages.last().getTools().filter { it.canResumeExecution }
             }
  

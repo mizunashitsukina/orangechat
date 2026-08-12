@@ -35,10 +35,7 @@ import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.db.entity.MemoryBankEntity
 import me.rerere.rikkahub.data.model.ExternalMemory
 import org.koin.core.context.GlobalContext
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 /**
  * 日记总结服务
@@ -130,8 +127,7 @@ class DiarySummaryService {
                 alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
             }
 
-            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            Log.d(TAG, "Scheduled diary summary at ${sdf.format(Date(triggerTime))} (delay: ${delayMs / 60000} min)")
+            Log.d(TAG, "Diary summary scheduling completed")
         }
 
         fun cancel(context: Context) {
@@ -201,9 +197,9 @@ class DiarySummaryService {
                     val service = ExternalMemoryService(config)
                     val messages = service.queryMessagesByDate(dateStr).getOrDefault(emptyList())
                     allMessages.addAll(messages)
-                    Log.d(TAG, "getDayMessagesFromSupabase: ${config.name} returned ${messages.size} messages for $dateStr")
+                    Log.d(TAG, "External memory message fetch succeeded: count=${messages.size}")
                 }.onFailure {
-                    Log.w(TAG, "Failed to fetch messages from ${config.name} for $dateStr", it)
+                    Log.w(TAG, "External memory message fetch failed: ${it.javaClass.simpleName}")
                 }
             }
 
@@ -221,7 +217,7 @@ class DiarySummaryService {
                     dateGroup = dateStr
                 )
             }.also {
-                Log.d(TAG, "getDayMessagesFromSupabase: total ${it.size} unique messages for $dateStr")
+                Log.d(TAG, "External memory message deduplication completed: count=${it.size}")
             }
         }
 
@@ -352,9 +348,9 @@ class DiarySummaryService {
                         )
 
                         if (savedMemory != null) {
-                            Log.i(TAG, "Diary saved to local memory bank for $dateStr assistant=$assistantId")
+                            Log.i(TAG, "Local diary summary save succeeded")
                         } else {
-                            Log.e(TAG, "saveAutoSummary returned null for $dateStr assistant=$assistantId")
+                            Log.e(TAG, "Local diary summary save failed")
                         }
 
                         // 保存到外置记忆库（日记摘要）
@@ -391,7 +387,7 @@ class DiarySummaryService {
                                         targetDate = dateStr,
                                     )
                                     if (saveResult.isSuccess) {
-                                        Log.i(TAG, "Diary saved to external memory ${config.name} for $dateStr assistant=$assistantId")
+                                        Log.i(TAG, "External diary summary save succeeded")
                                     } else {
                                         Log.w(TAG, "External memory save failed: ${saveResult.exceptionOrNull()?.javaClass?.simpleName ?: "UnknownError"}")
                                     }
@@ -427,7 +423,7 @@ class DiarySummaryService {
  */
 class DiarySummaryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        Log.d(DiarySummaryService.TAG, "DiarySummaryReceiver triggered, action=${intent.action}")
+        Log.d(DiarySummaryService.TAG, "Diary summary receiver triggered")
         when (intent.action) {
             DiarySummaryService.ACTION_DIARY_SUMMARY -> {
                 val serviceIntent = Intent(context, DiarySummaryTriggerService::class.java)

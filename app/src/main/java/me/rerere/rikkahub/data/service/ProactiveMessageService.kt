@@ -157,7 +157,7 @@ class ProactiveMessageService : KoinComponent {
                 alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
             }
 
-            Log.d(TAG, "Scheduled proactive message in $delayMinutes minutes, trigger at ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(triggerTime))}")
+            Log.d(TAG, "Proactive message scheduling completed")
 
             // Also schedule via WorkManager as a more reliable fallback
             ProactiveMessageWorker.scheduleNext(context, setting)
@@ -231,7 +231,7 @@ class ProactiveMessageService : KoinComponent {
                 sb.appendLine("距离上次聊天: 很久没有聊天了")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get last message time", e)
+            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
         }
 
         // Current time
@@ -262,7 +262,7 @@ class ProactiveMessageService : KoinComponent {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get location context", e)
+            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
         }
 
         // App usage
@@ -282,7 +282,7 @@ class ProactiveMessageService : KoinComponent {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get app usage context", e)
+            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
         }
 
         // Foreground app
@@ -296,7 +296,7 @@ class ProactiveMessageService : KoinComponent {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get foreground app", e)
+            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
         }
 
         // 今日通知
@@ -309,7 +309,7 @@ class ProactiveMessageService : KoinComponent {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get notifications", e)
+            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
         }
 
         // 设备信息（电量、充电状态等）
@@ -324,7 +324,7 @@ class ProactiveMessageService : KoinComponent {
                 sb.appendLine("设备电量: ${pct}%${if (isCharging) "（充电中）" else ""}")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get battery info", e)
+            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
         }
 
         // 健康状态（Gadgetbridge）- 跳过，AI可通过工具自行查询
@@ -361,7 +361,7 @@ class ProactiveMessageService : KoinComponent {
                 localDateTime?.toInstant(TimeZone.currentSystemDefault())
             } else null
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to get last message time", e)
+            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -369,7 +369,7 @@ class ProactiveMessageService : KoinComponent {
 
 class ProactiveMessageReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        Log.d(ProactiveMessageService.TAG, "=== onReceive triggered at ${System.currentTimeMillis()}, action=${intent.action} ===")
+        Log.d(ProactiveMessageService.TAG, "Proactive message receiver triggered")
         when (intent.action) {
             ProactiveMessageService.ACTION_PROACTIVE_MESSAGE -> {
                 Log.d(ProactiveMessageService.TAG, "Starting ProactiveMessageTriggerService...")
@@ -387,7 +387,7 @@ class ProactiveMessageReceiver : BroadcastReceiver() {
                             ProactiveMessageService.scheduleNext(context, proactiveSetting)
                         }
                     } catch (e: Exception) {
-                        Log.e(ProactiveMessageService.TAG, "Failed to reschedule after boot", e)
+                        Log.e(ProactiveMessageService.TAG, "Proactive message reschedule failed: ${e.javaClass.simpleName}")
                     }
                 }
             }
@@ -538,11 +538,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 // 理由：等对方生成结束后，上下文（用户可能已在聊别的话题）大概率已过时，硬等没有意义。
                 val myJob = coroutineContext[Job]
                 if (myJob == null || !chatService.getOrCreateSession(conversationId).tryClaimGeneration(myJob)) {
-                    Log.d(
-                        TAG,
-                        "Skip proactive trigger: session $conversationId already generating " +
-                            "(normal chat or another proactive trigger in progress)"
-                    )
+                    Log.d(TAG, "Proactive trigger skipped: generation already in progress")
                     // 必须走到 finally 块的"安排下一次触发"逻辑，不能绕过定时链收尾。
                     // 用 stopSelf + return@launch 退出主流程，finally 会正常执行（scheduleNext 已用 NonCancellable 保护）。
                     stopSelf()
@@ -765,9 +761,9 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                                 putExtra("conversationId", conversationId.toString())
                             }
                             startActivity(jumpIntent)
-                            Log.d(TAG, "Force jump to conversation $conversationId")
+                            Log.d(TAG, "Proactive navigation completed")
                         } catch (e: Exception) {
-                            Log.e(TAG, "Force jump failed", e)
+                            Log.e(TAG, "Proactive navigation failed: ${e.javaClass.simpleName}")
                         }
                     }
                 }
@@ -776,11 +772,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 // 这是正常情况，不应当成错误。打印 debug 日志并重新抛出，遵循 Kotlin 协程取消传播语义。
                 // 注意 catch 顺序：CancellationException 必须在 Exception 之前，否则被泛化分支提前吃掉。
                 // 重新抛出后 finally 块仍会正常执行（scheduleNext 已用 NonCancellable 保护）。
-                Log.d(
-                    ProactiveMessageService.TAG,
-                    "Proactive generation cancelled (likely user started a new message), " +
-                        "conversationId=$conversationId"
-                )
+                Log.d(ProactiveMessageService.TAG, "Proactive generation cancelled")
                 throw e
             } catch (e: Exception) {
                 Log.e(ProactiveMessageService.TAG, "Proactive AI operation failed: ${e.javaClass.simpleName}")
@@ -830,7 +822,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                                 currentSettings.proactiveMessageSetting
                             )
                         } catch (e: Exception) {
-                            Log.e(ProactiveMessageService.TAG, "Failed to reschedule after completion/error/cancellation", e)
+                            Log.e(ProactiveMessageService.TAG, "Proactive message reschedule failed: ${e.javaClass.simpleName}")
                         }
                     }
                 }
@@ -950,7 +942,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
             )
         }
 
-        Log.d(TAG, "Saved proactive message to conversation $conversationId")
+        Log.d(TAG, "Proactive message save completed")
         return conversationId
     }
 
@@ -1118,7 +1110,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
         var hasJumpFlag = false // AI 原始输出是否含 [JUMP] 标记（在输出转换器处理前检测）
 
         for (step in 0 until MAX_TOOL_STEPS) {
-            Log.d(TAG, "generateWithTools: step $step/${MAX_TOOL_STEPS}")
+            Log.d(TAG, "AI operation continuing: streamText")
 
             // 防御性：每轮调用前合并相邻同角色（尤其 assistant）消息，
             // 避免工具调用多步生成产生相邻 assistant 消息触发 API 400

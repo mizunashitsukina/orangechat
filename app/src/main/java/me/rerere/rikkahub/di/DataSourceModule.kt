@@ -77,7 +77,7 @@ val dataSourceModule = module {
                             if (!success) {
                                 android.util.Log.e(
                                     "DataSourceModule",
-                                    "jieba_dict failed: $result, path=${dictDir.absolutePath}"
+                                    "jieba_dict initialization failed"
                                 )
                             }
                         }
