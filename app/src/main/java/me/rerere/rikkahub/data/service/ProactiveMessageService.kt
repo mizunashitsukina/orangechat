@@ -641,15 +641,15 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     }
                 )
 
-                Log.d(TAG, "Calling AI API for proactive message with ${historyMessages.size} history messages, ${tools.size} tools (reasoning=${assistant.reasoningLevel}, model=${model.modelId}, provider=${providerSetting::class.simpleName})...")
+                Log.d(TAG, "AI operation started: provider=${providerSetting.javaClass.simpleName}, operation=streamText")
                 // 诊断: 列出工具及其 parameters 是否为 null, 便于定位 "Invalid request body"
                 tools.forEach { t ->
                     val hasSchema = t.parameters() != null
-                    if (!hasSchema) Log.w(TAG, "Tool '${t.name}' has NULL parameters schema — may cause API rejection")
+                    if (!hasSchema) Log.w(TAG, "Tool schema validation failed")
                 }
 
                 // 执行生成，支持工具调用
-                val (finalMessages, hasToolCalls, hasJumpFlag) = generateWithTools(
+                val (finalMessages, _, hasJumpFlag) = generateWithTools(
                     conversationId = conversationId,
                     providerImpl = providerImpl,
                     providerSetting = providerSetting,
@@ -688,7 +688,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     updateOrAppendAiMessage(conversationId, cleanedAiMessage)
                 }
 
-                Log.d(TAG, "Proactive message generated: '${replyText.take(100)}...' (${replyText.length} chars), hasToolCalls=$hasToolCalls, shouldJump=$shouldJump")
+                Log.d(TAG, "AI operation completed: provider=${providerSetting.javaClass.simpleName}, operation=streamText")
 
                 if (replyText.isBlank() || rawText.contains("[PASS]")) {
                     // AI 选择跳过，移除本次生成的 aiMessage node（基于 id 匹配，不误删历史）
@@ -733,8 +733,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                                         }.onFailure {
                                             Log.w(
                                                 ProactiveMessageService.TAG,
-                                                "Failed to save proactive message to external memory ${config.name}",
-                                                it
+                                                "External memory save failed: ${it.javaClass.simpleName}"
                                             )
                                         }
                                     }
@@ -742,7 +741,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                             }
                         }
                     } catch (e: Exception) {
-                        Log.w(ProactiveMessageService.TAG, "Failed to save proactive message to external memory", e)
+                        Log.w(ProactiveMessageService.TAG, "External memory save failed: ${e.javaClass.simpleName}")
                     }
                     showProactiveNotification(conversationId, assistant.name.ifBlank { "AI" }, replyText)
                     // 悬浮球提醒（作为通知之上的增强层；无 overlay 权限时由 FloatingBubbleService 兜底跳过）
@@ -784,11 +783,10 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 )
                 throw e
             } catch (e: Exception) {
-                Log.e(ProactiveMessageService.TAG, "Failed to trigger proactive message", e)
-                // 如果是 API 返回的 HTTP 错误, 把原始错误体也打出来便于定位
+                Log.e(ProactiveMessageService.TAG, "Proactive AI operation failed: ${e.javaClass.simpleName}")
                 val cause = e.cause
                 if (cause != null) {
-                    Log.e(ProactiveMessageService.TAG, "Underlying cause: ${cause::class.simpleName}: ${cause.message}", cause)
+                    Log.e(ProactiveMessageService.TAG, "Proactive AI underlying error: ${cause.javaClass.simpleName}")
                 }
                 // 清理本次触发中流式写入的不完整/错误 AI 消息, 防止它们污染历史导致下一轮请求失败
                 conversationId?.let { cid ->
@@ -814,7 +812,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                             }
                         }
                     } catch (cleanupErr: Exception) {
-                        Log.w(ProactiveMessageService.TAG, "Failed to cleanup error messages", cleanupErr)
+                        Log.w(ProactiveMessageService.TAG, "AI cleanup failed: ${cleanupErr.javaClass.simpleName}")
                     }
                 }
             } finally {
@@ -1191,14 +1189,14 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
 
             // 有工具调用
             hasToolCalls = true
-            Log.d(TAG, "Tool calls detected: ${toolCalls.size}")
+            Log.d(TAG, "AI response requested tool execution")
 
             // 执行工具（后台模式下自动执行，不需要用户审批）
             val executedTools = mutableListOf<UIMessagePart.Tool>()
             for (toolCall in toolCalls) {
                 val toolDef = tools.find { it.name == toolCall.toolName }
                 if (toolDef == null) {
-                    Log.w(TAG, "Tool ${toolCall.toolName} not found")
+                    Log.w(TAG, "Requested tool was not found")
                     executedTools.add(toolCall.copy(
                         output = listOf(UIMessagePart.Text("""{"error":"Tool not found"}"""))
                     ))
@@ -1208,7 +1206,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 // 检查是否需要审批
                 if (toolDef.needsApproval) {
                     // 后台模式下，需要审批的工具自动拒绝
-                    Log.w(TAG, "Tool ${toolCall.toolName} needs approval, auto-denying in proactive mode")
+                    Log.w(TAG, "Requested tool needs approval; denied in proactive mode")
                     executedTools.add(toolCall.copy(
                         output = listOf(UIMessagePart.Text("""{"error":"Tool execution denied: requires user approval in proactive mode"}""")),
                         approvalState = ToolApprovalState.Denied("Proactive mode: requires approval")
@@ -1220,14 +1218,14 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                             json.parseToJsonElement(toolCall.input.ifBlank { "{}" })
                         } catch (e: Exception) {
                             // toolCall.input 可能因为流式截断而是不完整的 JSON, 回退为空对象
-                            Log.w(TAG, "Tool ${toolCall.toolName} input JSON is incomplete, falling back to empty object: ${toolCall.input.take(200)}")
+                            Log.w(TAG, "Tool input JSON is incomplete; using empty input")
                             JsonObject(emptyMap())
                         }
-                        Log.d(TAG, "Executing tool ${toolDef.name} with args: $args")
+                        Log.d(TAG, "Executing requested tool")
                         val result = toolDef.execute(args)
                         executedTools.add(toolCall.copy(output = result))
                     } catch (e: Exception) {
-                        Log.e(TAG, "Tool execution failed: ${toolCall.toolName}, args=${toolCall.input}", e)
+                        Log.e(TAG, "Tool execution failed: ${e.javaClass.simpleName}")
                         executedTools.add(toolCall.copy(
                             output = listOf(UIMessagePart.Text("""{"error":"${e.message}"}"""))
                         ))

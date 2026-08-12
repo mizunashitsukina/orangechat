@@ -458,11 +458,11 @@ class ChatService(
                         try {
                             pluginLoader.callEvent("message_sent", eventData)
                         } catch (e: Exception) {
-                            Log.w(TAG, "Failed to trigger message_sent event", e)
+                            Log.w(TAG, "message_sent event failed: ${e.javaClass.simpleName}")
                         }
                     }
                 }.onFailure { e ->
-                    Log.w(TAG, "Failed to trigger message_sent event", e)
+                    Log.w(TAG, "message_sent event failed: ${e.javaClass.simpleName}")
                 }
 
                 // 保存用户消息到外置记忆库（fire-and-forget，不阻塞后续生成流程）
@@ -486,13 +486,13 @@ class ChatService(
                                         content = messageText,
                                     )
                                 }.onFailure {
-                                    Log.w(TAG, "Failed to save user message to external memory ${config.name}", it)
+                                    Log.w(TAG, "External memory save failed: ${it.javaClass.simpleName}")
                                 }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to save user message to external memory", e)
+                    Log.w(TAG, "External memory save failed: ${e.javaClass.simpleName}")
                 }
 
                 // 开始补全
@@ -502,8 +502,7 @@ class ChatService(
 
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
-                e.printStackTrace()
-                Log.e(TAG, "sendMessage failed, conversationId=$conversationId", e)
+                Log.e(TAG, "AI sendMessage failed: ${e.javaClass.simpleName}")
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
             }
         }
@@ -589,12 +588,12 @@ class ChatService(
                     ?: settings.getCurrentAssistant()
                 val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
                 if (model == null) {
-                    Log.e(TAG, "notifyVoiceCallDeclined: no model found, conversationId=$conversationId")
+                    Log.e(TAG, "AI generateText failed: model not configured")
                     return@launch
                 }
                 val provider = model.findProvider(settings.providers)
                 if (provider == null) {
-                    Log.e(TAG, "notifyVoiceCallDeclined: no provider found, conversationId=$conversationId, modelId=${model.id}")
+                    Log.e(TAG, "AI generateText failed: provider not configured")
                     return@launch
                 }
                 val providerHandler = providerManager.getProviderByType(provider)
@@ -638,7 +637,7 @@ class ChatService(
 
                 val replyText = result.choices[0].message?.toText()?.trim().orEmpty()
                 if (replyText.isBlank()) {
-                    Log.w(TAG, "notifyVoiceCallDeclined: empty reply, conversationId=$conversationId")
+                    Log.w(TAG, "AI generateText completed with empty response")
                     return@launch
                 }
 
@@ -673,7 +672,7 @@ class ChatService(
                     sendGenerationDoneNotification(conversationId, senderName)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "notifyVoiceCallDeclined failed, conversationId=$conversationId", e)
+                Log.e(TAG, "AI generateText failed: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -735,7 +734,7 @@ class ChatService(
 
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
-                Log.e(TAG, "regenerateAtMessage failed, conversationId=$conversationId", e)
+                Log.e(TAG, "AI regenerate failed: ${e.javaClass.simpleName}")
                 addError(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
             }
         }
@@ -801,7 +800,7 @@ class ChatService(
 
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
-                Log.e(TAG, "handleToolApproval failed, conversationId=$conversationId, toolCallId=$toolCallId", e)
+                Log.e(TAG, "AI tool approval handling failed: ${e.javaClass.simpleName}")
                 addError(e, conversationId, title = context.getString(R.string.error_title_tool_approval))
             }
         }
@@ -957,10 +956,8 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
             // 取消 Live Update 通知
             cancelLiveUpdateNotification(conversationId)
 
-            it.printStackTrace()
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
-            Logging.log(TAG, "handleMessageComplete: $it")
-            Logging.log(TAG, it.stackTraceToString())
+            Logging.log(TAG, "AI streamText failed: ${it.javaClass.simpleName}")
         }.onSuccess {
             val finalConversation = session.saveMutex.withLock {
                 val latest = getConversationFlow(conversationId).value
@@ -1042,11 +1039,11 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                     try {
                         pluginLoader.callEvent("message_received", eventData)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to trigger message_received event", e)
+                        Log.w(TAG, "message_received event failed: ${e.javaClass.simpleName}")
                     }
                 }
             }.onFailure { e ->
-                Log.w(TAG, "Failed to trigger message_received event", e)
+                Log.w(TAG, "message_received event failed: ${e.javaClass.simpleName}")
             }
 
             launchWithConversationReference(conversationId) {
@@ -1077,7 +1074,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                                             content = messageText,
                                         )
                                     }.onFailure {
-                                        Log.w(TAG, "Failed to save assistant message to external memory ${config.name}", it)
+                                        Log.w(TAG, "External memory save failed: ${it.javaClass.simpleName}")
                                     }
                                 }
                             }
@@ -1085,7 +1082,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to save assistant message to external memory", e)
+                Log.w(TAG, "External memory save failed: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -1211,8 +1208,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                 }
             }
         }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "generateTitle failed, conversationId=$conversationId", it)
+            Log.e(TAG, "AI generateTitle failed: ${it.javaClass.simpleName}")
             addError(
                 error = it,
                 conversationId = conversationId,
@@ -1269,8 +1265,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                 )
             }
         }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "generateSuggestion failed, conversationId=$conversationId", it)
+            Log.e(TAG, "AI generateSuggestion failed: ${it.javaClass.simpleName}")
         }
     }
 

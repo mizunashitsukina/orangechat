@@ -96,12 +96,10 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
             val errorBody = response.body?.string()
-            val errorMsg = "generateText: HTTP ${response.code} error response body: $errorBody"
+            val errorMsg = "OpenAI generateText failed: HTTP ${response.code}"
             Log.e(TAG, errorMsg)
             Logging.log(TAG, errorMsg)
             throw Exception("Failed to get response: ${response.code} $errorBody")
@@ -239,11 +237,6 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        // just for debugging response body
-        // println(client.newCall(request).await().body?.string())
-
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -252,11 +245,9 @@ class ChatCompletionsAPI(
                 data: String
             ) {
                 if (data == "[DONE]") {
-                    println("[onEvent] (done) 结束流: $data")
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: $data")
                 // okhttp-sse 的 onEvent 拿到的 data 已经是按 SSE 协议规范拼好的完整
                 // 消息(网关把一条 data: 物理拆成多行发送时, okHttp 会用 '\n' 还原)。
                 // 这里直接当一个完整 JSON 解析即可, 不能再按 '\n' 二次拆分 —— 否则当
@@ -266,17 +257,7 @@ class ChatCompletionsAPI(
                     json.parseToJsonElement(data).jsonObject
                 } catch (e: Throwable) {
                     // 上游真的发了坏数据时不要让整个流直接崩掉裸抛 Unexpected EOF。
-                    // 记录长度和前后片段便于定位, 但避免把整个超长内容打进日志。
-                    val preview = if (data.length > 200) {
-                        "${data.take(100)}...(${data.length} chars)...${data.takeLast(100)}"
-                    } else {
-                        data
-                    }
-                    Log.w(
-                        TAG,
-                        "onEvent: failed to parse SSE data (len=${data.length}, preview=$preview)",
-                        e
-                    )
+                    Log.w(TAG, "OpenAI stream event parse failed: ${e.javaClass.simpleName}")
                     close(
                         Exception("Failed to parse stream data: ${e.message} (data length=${data.length})", e)
                     )
@@ -284,14 +265,9 @@ class ChatCompletionsAPI(
                 }
                 if (chunkJson["error"] != null) {
                     // 流式响应中携带了 error 字段 (HTTP 连接本身是200, 但错误包在流数据里)
-                    // 记录完整的原始 error JSON 内容, 便于排查上游返回的具体错误原因
-                    val errorRawJson = chunkJson["error"].toString()
-                    val model = chunkJson["model"]?.jsonPrimitive?.contentOrNull ?: "unknown"
-                    val errorMsg = "onEvent stream error | model=$model | time=${System.currentTimeMillis()} | raw error JSON: $errorRawJson"
-                    Log.e(TAG, errorMsg)
-                    Logging.log(TAG, errorMsg)
                     val error = chunkJson["error"]!!.parseErrorDetail()
-                    Logging.log(TAG, "onEvent stream error parsed: $error")
+                    Log.e(TAG, "OpenAI streamText returned a provider error")
+                    Logging.log(TAG, "OpenAI streamText returned a provider error")
                     close(error)
                     return
                 }
@@ -303,8 +279,8 @@ class ChatCompletionsAPI(
                     val errorContent = chunkJson["choices"]?.jsonArray?.getOrNull(0)
                         ?.jsonObject?.get("delta")?.jsonObject?.get("content")
                         ?.jsonPrimitive?.contentOrNull ?: "unknown gateway error"
-                    Log.e(TAG, "onEvent: gateway returned error disguised as content: $errorContent")
-                    Logging.log(TAG, "onEvent: gateway error disguised as content: $errorContent")
+                    Log.e(TAG, "OpenAI streamText returned a gateway error")
+                    Logging.log(TAG, "OpenAI streamText returned a gateway error")
                     close(Exception("Gateway error: $errorContent"))
                     return
                 }
@@ -345,29 +321,21 @@ class ChatCompletionsAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                val failureMsg = "onFailure: ${t?.javaClass?.name} ${t?.message} / response=$response"
+                val statusCode = response?.code
+                val errorType = t?.javaClass?.simpleName ?: "UnknownError"
+                val failureMsg = "OpenAI streamText failed: HTTP $statusCode, error=$errorType"
                 Log.e(TAG, failureMsg)
                 Logging.log(TAG, failureMsg)
 
                 val bodyRaw = response?.body?.stringSafe()
-                // 记录上游返回的原始响应体, 便于排查 400/500 等错误的具体原因
-                if (!bodyRaw.isNullOrBlank()) {
-                    val bodyMsg = "onFailure: raw response body (HTTP ${response?.code}): $bodyRaw"
-                    Log.e(TAG, bodyMsg)
-                    Logging.log(TAG, bodyMsg)
-                }
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
                         exception = bodyElement.parseErrorDetail()
-                        val detailMsg = "onFailure: parsed error detail: $exception"
-                        Log.e(TAG, detailMsg)
-                        Logging.log(TAG, detailMsg)
                     }
                 } catch (e: Throwable) {
-                    val parseMsg = "onFailure: failed to parse error body: $bodyRaw"
-                    Log.w(TAG, parseMsg, e)
+                    val parseMsg = "OpenAI streamText error parsing failed: ${e.javaClass.simpleName}"
+                    Log.w(TAG, parseMsg)
                     Logging.log(TAG, parseMsg)
                     exception = e
                 } finally {
@@ -383,7 +351,6 @@ class ChatCompletionsAPI(
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource ")
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta, 导致回复中间缺字 (#1295), 因此缓冲必须无界。
@@ -742,7 +709,7 @@ class ChatCompletionsAPI(
                                                 put("url", encodedImage.base64)
                                             })
                                         }.onFailure {
-                                            it.printStackTrace()
+                                            Log.w(TAG, "OpenAI image encoding failed: ${it.javaClass.simpleName}")
                                             put("type", "text")
                                             put("text", "")
                                         }
@@ -802,7 +769,7 @@ class ChatCompletionsAPI(
                                             put("url", encodedImage.base64)
                                         })
                                     }.onFailure {
-                                        it.printStackTrace()
+                                        Log.w(TAG, "OpenAI image encoding failed: ${it.javaClass.simpleName}")
                                         put("type", "text")
                                         put("text", "")
                                     }

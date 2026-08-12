@@ -1196,7 +1196,7 @@ private class PluginWebViewClient(
                             )
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "callAI failed", e)
+                        Log.e(TAG, "callAI failed: ${e.javaClass.simpleName}")
                         val errorResult = """{"success":false,"error":"${e.message?.replace("\"", "\\\"")?.replace("\\", "\\\\")}"}"""
                         webView.post {
                             webView.evaluateJavascript(
@@ -1355,7 +1355,7 @@ private class PluginWebViewClient(
                 .replace("\t", "\\t")
             """{"success":true,"text":"$escaped"}"""
         } catch (e: Exception) {
-            Log.e(TAG, "AI generation failed", e)
+            Log.e(TAG, "AI generation failed: ${e.javaClass.simpleName}")
             """{"success":false,"error":"${e.message?.replace("\"", "\\\"")?.replace("\\", "\\\\")}"}"""
         }
     }

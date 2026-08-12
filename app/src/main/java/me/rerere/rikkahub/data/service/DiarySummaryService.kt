@@ -238,7 +238,7 @@ class DiarySummaryService {
         ) {
             withContext(Dispatchers.IO) {
                 try {
-                    Log.i(TAG, "[STEP 1] generateDiaryForDate START for $dateStr")
+                    Log.i(TAG, "AI operation started: generateDiary")
                     
                     val settings = settingsStore.settingsFlowRaw.first()
                     Log.i(TAG, "[STEP 2] settings loaded")
@@ -246,14 +246,14 @@ class DiarySummaryService {
                     val model = settings.getCurrentChatModel()
                         ?: settings.findModelById(settings.chatModelId)
                         ?: run {
-                            Log.e(TAG, "[STEP FAIL] No chat model available for diary generation, chatModelId=${settings.chatModelId}")
+                            Log.e(TAG, "AI generateDiary failed: model not configured")
                             return@withContext
                         }
-                    Log.i(TAG, "[STEP 3] model found: ${model.id}")
+                    Log.i(TAG, "[STEP 3] AI model found")
 
                     val provider = model.findProvider(settings.providers)
                         ?: run {
-                            Log.e(TAG, "[STEP FAIL] No provider found for model ${model.id}")
+                            Log.e(TAG, "[STEP FAIL] No provider found")
                             return@withContext
                         }
                     Log.i(TAG, "[STEP 4] provider found: ${provider.javaClass.simpleName}")
@@ -266,7 +266,7 @@ class DiarySummaryService {
                         .filter { it.key.isNotBlank() }
                     
                     if (groupedMessages.isEmpty()) {
-                        Log.w(TAG, "No messages with valid assistantId for $dateStr")
+                        Log.w(TAG, "AI generateDiary skipped: no valid messages")
                         return@withContext
                     }
 
@@ -285,11 +285,11 @@ class DiarySummaryService {
                             }.getOrDefault(false)
                         }
                         if (hasExistingDiary) {
-                            Log.d(TAG, "Diary already exists for $dateStr assistant=$assistantId, skip generation")
+                            Log.d(TAG, "AI generateDiary skipped: result already exists")
                             return@forEach
                         }
 
-                        Log.i(TAG, "[STEP 5a] Processing diary for assistant=$assistantId, messages=${assistantMessages.size}")
+                        Log.i(TAG, "AI operation continuing: generateDiary")
 
                         // 构建对话内容
                         val conversationText = assistantMessages.joinToString("\n") { msg ->
@@ -340,7 +340,7 @@ class DiarySummaryService {
                         val summaryText = result.choices.firstOrNull()?.message?.toText()?.trim() ?: ""
 
                         if (summaryText.isBlank()) {
-                            Log.e(TAG, "Generated diary is empty for $dateStr assistant=$assistantId")
+                            Log.e(TAG, "AI generateDiary completed with empty response")
                             return@forEach
                         }
 
@@ -393,20 +393,20 @@ class DiarySummaryService {
                                     if (saveResult.isSuccess) {
                                         Log.i(TAG, "Diary saved to external memory ${config.name} for $dateStr assistant=$assistantId")
                                     } else {
-                                        Log.w(TAG, "Failed to save diary to external memory ${config.name} for $dateStr assistant=$assistantId", saveResult.exceptionOrNull())
+                                        Log.w(TAG, "External memory save failed: ${saveResult.exceptionOrNull()?.javaClass?.simpleName ?: "UnknownError"}")
                                     }
                                 }.onFailure {
-                                    Log.w(TAG, "Failed to save diary to external memory ${config.name} for $dateStr assistant=$assistantId", it)
+                                    Log.w(TAG, "External memory save failed: ${it.javaClass.simpleName}")
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.w(TAG, "Failed to save diary to external memory for $dateStr assistant=$assistantId", e)
+                            Log.w(TAG, "External memory save failed: ${e.javaClass.simpleName}")
                         }
                     }
 
-                    Log.i(TAG, "[STEP DONE] Diary generation completed for $dateStr, assistants=${groupedMessages.size}")
+                    Log.i(TAG, "AI operation completed: generateDiary")
                 } catch (e: Exception) {
-                    Log.e(TAG, "[STEP EXCEPTION] Failed to generate diary for $dateStr", e)
+                    Log.e(TAG, "AI generateText failed: ${e.javaClass.simpleName}")
                 }
             }
         }
@@ -465,7 +465,7 @@ class DiarySummaryTriggerService : Service() {
             try {
                 DiarySummaryService.checkAndGenerateMissingDiaries(this@DiarySummaryTriggerService)
             } catch (e: Exception) {
-                Log.e(TAG, "Diary summary generation failed", e)
+                Log.e(TAG, "AI diary generation failed: ${e.javaClass.simpleName}")
             } finally {
                 // 调度下一次
                 DiarySummaryService.rescheduleIfEnabled(this@DiarySummaryTriggerService)
