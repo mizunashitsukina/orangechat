@@ -91,11 +91,8 @@
 | --- | --- | --- |
 | MCP 客户端支持 SSE 和 Streamable HTTP，支持 headers、工具同步、重连和 OAuth | 已实现 | `app/src/main/java/me/rerere/rikkahub/data/ai/mcp/McpConfig.kt` 的 `SseTransportServer`/`StreamableHTTPServer`；同目录 `McpManager.kt` 的连接、`syncTools`、`callTool` 和 OAuth 流程 |
 | MCP OAuth 回调经自定义 URI 回到应用 | 已实现 | Manifest 的 `rikkahub://mcp-oauth-callback`；`McpOAuthCallbackActivity.kt` |
-| 每个 MCP 工具可声明 `needsApproval` | 已实现 | `McpConfig.kt` 的 `McpTool.needsApproval`；`ToolSurfaceBuilder.kt` 转换为通用 Tool |
-| 默认全局强制确认工具调用；需要确认时生成循环转为 Pending 并等待用户决定 | 已实现 | `PreferencesStore.kt` 的 `forceConfirmToolCalls = true`；`GenerationHandler.kt` 对 `Auto`/`Pending`/`Approved`/`Denied`/`Answered` 的分支 |
-| “lazy mode”可以跳过普通逐项审批 | 已实现 | `GenerationHandler.kt` 中 `isInLazyMode` 的 auto-approve 分支 |
-| 高危命令另有不可配置的正则硬阻断，但源码承认它不是对抗性沙箱 | 部分实现 | `data/ai/tools/HardlineCommandGuard.kt` 的 `checkTool`、危险模式和 threat-model 注释 |
-| Headless Workflow 在执行前做权限预检和敏感命令阻断 | 已实现 | `workflow/execution/WorkflowEngine.kt` 的 runtime preflight、`HardlineCommandGuard.checkTool`；`workflowHeadlessBlockSensitive = true` |
+| MCP 与本地工具共享统一的审批状态模型 | 已实现 | `McpConfig.kt` 的 `McpTool.needsApproval`；`ToolSurfaceBuilder.kt`；`GenerationHandler.kt` 对 `ToolApprovalState` 的处理 |
+| 交互式工具调用和 Headless Workflow 均有执行前控制 | 部分实现 | `GenerationHandler.kt`；`workflow/execution/WorkflowEngine.kt`；具体安全边界在私有维护记录中跟踪 |
 
 本地/系统工具面实际包含屏幕无障碍操作、截图、SSH/SFTP、Workspace shell、文件读写、应用切换、使用情况、位置、相机、日历、短信、通知、媒体、音量、亮度、Wi-Fi、电话状态、闹钟、壁纸等。依据为 `app/src/main/java/me/rerere/rikkahub/data/ai/tools` 与 `tools/local` 的 Tool 构造函数，以及 `LocalTools.kt`/`SystemTools.kt` 的汇总注册。它们不能按“聊天功能”统一评估，后续应按工具逐项维护权限、审批和数据边界。
 
@@ -168,7 +165,7 @@ Manifest 请求了后台位置、短信、日历、麦克风、相机、通知�
 | ZIP 可包含 Settings、Room DB/WAL/SHM、上传文件、Skills，并在本地导出时包含插件设置/目录 | 已实现 | `WebDavSync.prepareBackupFile` 的 `settings.json`、数据库和目录写入逻辑；`includePlugins` 分支 |
 | Chatbox 对话/Provider 导入和 Cherry Studio Provider 导入 | 已实现 | `ChatboxImporter.kt`；`CherryStudioProviderImporter.kt`；`BackupVM.restoreFromChatBox`/`restoreFromCherryStudio` |
 | 模式注入和 Lorebook 支持原生 JSON及部分 SillyTavern 格式 | 已实现 | `data/export/ExportSerializer.kt` 的 `ModeInjectionExportSerializer`、`LorebookExportSerializer` 及 `tryImportSillyTavern*` |
-| Android Auto Backup 规则一致性 | 未确认 | Manifest `allowBackup=true`；`res/xml/backup_rules.xml` 只 include `upload/`；`res/xml/data_extraction_rules.xml` 仍是未定制模板，Android 版本间实际覆盖范围需设备验证 |
+| Android 系统备份/设备迁移规则的跨版本一致性 | 未确认 | Manifest 与 `res/xml/backup_rules.xml`、`res/xml/data_extraction_rules.xml`；具体数据范围在私有维护记录中跟踪，实际行为需按 Android 版本验证 |
 
 恢复逻辑会直接替换 Settings 和数据库文件并提示重启，依据为 `WebDavSync.restoreFromBackupFile` 和 `ui/pages/backup/components/BackupDialog.kt`。后续修改 schema 或 Settings 时必须同步验证“旧备份恢复 → 启动 → migration → 数据可读”的整链路。
 
@@ -180,8 +177,7 @@ Manifest 请求了后台位置、短信、日历、麦克风、相机、通知�
 | Ktor 在设备内提供 SPA 静态资源和 `/api` | 已实现 | `web/src/main/java/me/rerere/rikkahub/web/Entry.kt` 的 `staticResources`/`singlePageApplication`；`app/src/main/java/me/rerere/rikkahub/web/WebApiModule.kt` 的 `route("/api")` |
 | Web API 直接复用 Android 的 `ChatService`、`ConversationRepository`、`SettingsStore` 和 `FilesManager` | 已实现 | `WebServerManager.kt` 的构造参数；`configureWebApi` 参数与 route 注册 |
 | Web UI 可进行对话列表/搜索、发送、编辑、分支、重新生成、停止、工具审批和文件操作 | 已实现 | `web/routes/ConversationRoutes.kt`、`FilesRoutes.kt`、`SettingsRoutes.kt`；`web-ui/app/services/api.ts` 与 `routes/c.$id.tsx` |
-| Web Server 默认关闭；启用后默认监听非 localhost，JWT 也默认关闭 | 已实现（默认关闭但默认网络边界宽） | `PreferencesStore.Settings` 的 `webServerEnabled=false`、`webServerLocalhostOnly=false`、`webServerJwtEnabled=false`；`WebServerManager.start` |
-| JWT 打开且密码为空时，受保护 API 会保持关闭 | 已实现 | `WebApiModule.configureWebApi` 的 verifier/validate/challenge 与 `/auth/token` 检查 |
+| Web Server 可配置启停、监听范围和 JWT 访问控制 | 已实现 | `PreferencesStore.Settings` 的 Web Server 设置；`WebServerManager.start`；`WebApiModule.configureWebApi` |
 
 Web UI 不是独立后端，也不是 Android WebView 对原生页面的简单镜像；它是同一进程内、共用数据与 Chat 编排的另一套客户端。Web API 鉴权配置因此直接影响对话、文件和工具审批面的暴露范围。
 
@@ -192,10 +188,10 @@ Web UI 不是独立后端，也不是 Android WebView 对原生页面的简单�
 | MNN 本地 native 推理 | 已禁用 | `ai/build.gradle.kts` 的 externalNativeBuild 注释；MNN `.gitmodules` 条目没有进入当前源码树构建 |
 | 本地日记自动调度/补算 | 已禁用 | `DiarySummaryService.rescheduleIfEnabled`、`checkAndGenerateMissingDiaries` 已 deprecated 且只记录停用信息 |
 | Workflow chaining | 已禁用 | `WorkflowJson.parse` 拒绝 action 中的 `workflow_run` |
-| 主动消息、aggressive trigger、Web Server、Supabase sync、微信/QQ bot | 已实现（默认关闭） | `ProactiveMessageSetting`、`PreferencesStore.Settings`、`SystemToolsSetting`、`WechatBotSetting`、`QqBotSetting` 的默认值及对应 Service |
-| 屏幕自动化动作计数/限额 | 部分实现 | `data/ai/AgentTurnTracker.kt` 的 `recordAutomationAction()` 当前是 no-op；多个 accessibility tool 仍调用它 |
+| 主动消息、aggressive trigger、Web Server、Supabase sync、微信/QQ bot | 已实现（可选能力） | `ProactiveMessageSetting`、`PreferencesStore.Settings`、`SystemToolsSetting`、`WechatBotSetting`、`QqBotSetting` 及对应 Service |
+| 自动工具调用的安全控制 | 部分实现 | `GenerationHandler.kt`、`AgentTurnTracker.kt`；具体缺口在私有维护记录中跟踪 |
 | Baseline Profile 场景覆盖 | 部分实现 | `app/baselineprofile/src/main/java/me/rerere/baselineprofile/StartupBenchmarks.kt` 与同目录 `BaselineProfileGenerator.kt` 仍有待补充交互的 TODO |
-| Android 12+ data extraction 规则 | 部分实现 | `app/src/main/res/xml/data_extraction_rules.xml` 仍为 TODO 模板 |
+| Android 平台备份策略覆盖 | 部分实现 | Manifest 与备份规则资源已存在；跨版本覆盖和安全边界仍需完善 |
 | `Provider.getDisplayName` 默认实现 | 部分实现 | `ai/src/main/java/me/rerere/ai/provider/Provider.kt` 默认返回 `"TODO"`；实际 UI 是否总由具体实现覆盖需逐 Provider 验证 |
 
 “存在 Route/Service/Tool”只证明实现路径存在。涉及外部账号、厂商服务、无障碍、Shizuku、后台定位、地理围栏、Bot 或外部记忆的功能，均未在本次静态审计中使用真实凭据或真机验证。
@@ -204,15 +200,14 @@ Web UI 不是独立后端，也不是 Android WebView 对原生页面的简单�
 
 ### 8.1 安全与隐私
 
-| 风险 | 级别 | 状态 | 代码依据 |
-| --- | --- | --- | --- |
-| SSH 密码、私钥和 passphrase 以明文存入 Room | 高 | 已确认 | `data/db/entity/SshHostEntity.kt` 的源码注释及 `password`、`privateKey`、`passphrase` 字段 |
-| 本地/WebDAV/S3 备份序列化完整 Settings，可能连同 Provider、MCP OAuth/header、WebDAV/S3 等凭据进入未加密 ZIP/远端 | 高 | 已确认 | `WebDavSync.prepareBackupFile` 直接 `encodeToString(settingsStore.settingsFlow.value)`；`PreferencesStore.Settings` 包含 providers、mcpServers、webDavConfig、s3Config |
-| AI 请求正文可能包含提示词、消息或工具参数，并被 info 日志输出 | 高 | 已确认 | `ChatCompletionsAPI.kt`、`ResponseAPI.kt`、`ClaudeProvider.kt`、`GoogleProvider.kt` 对序列化 request body 的 `Log.i` |
-| Web Server 若用户仅开启服务而不改默认网络/鉴权设置，会监听所有接口且 API 不要求 JWT | 高 | 已确认 | `Settings.webServerLocalhostOnly=false`、`webServerJwtEnabled=false`；`WebServerManager` 的 `HOST_ALL_INTERFACES`；`WebApiModule` 的无鉴权 route 分支 |
-| Manifest 权限和 exported 组件面很大 | 高 | 已确认 | `app/src/main/AndroidManifest.xml` 的高风险权限、notification/accessibility/provider/receiver/service 声明 |
-| 工具审批可由 lazy mode 绕过；Hardline guard 明确不是安全沙箱 | 高 | 已确认 | `GenerationHandler.kt` 的 lazy 分支；`HardlineCommandGuard.kt` threat-model 注释 |
-| Android Auto Backup/设备迁移对敏感设置和数据库的实际覆盖范围不清晰 | 高 | 未确认 | Manifest `allowBackup`；两个 XML 规则不一致/未完成；需按 Android 版本实测 |
+静态审计已发现需要优先处理的安全敏感项，覆盖本地敏感数据保护、备份与迁移边界、日志最小化、Web 访问控制、工具授权，以及高权限 Android 能力。为避免在问题修复前公开具体攻击面、默认暴露方式或敏感数据范围，详细代码定位、风险边界和修复方案仅在私有维护记录中跟踪。
+
+公开仓库应继续保留以下高层原则：
+
+- 敏感数据必须采用与普通业务数据不同的保护边界。
+- 备份、导出、系统迁移和日志都必须遵循数据最小化。
+- Web、MCP、自动工具调用和 Headless Workflow 必须采用安全默认值与分层授权。
+- 高风险权限、exported 组件及设备控制能力必须单独审查并进行真机验证。
 
 ### 8.2 兼容性与维护性
 
@@ -237,12 +232,12 @@ Web UI 不是独立后端，也不是 Android WebView 对原生页面的简单�
 
 ### 必须先处理
 
-1. 建立秘密数据资产清单并设计设备端加密：优先覆盖 `SshHostEntity`、Provider/MCP/OAuth、WebDAV/S3 和 Bot 凭据。依据：`SshHostEntity.kt`、`PreferencesStore.kt`。
-2. 重新定义备份安全模型：明确加密格式、口令/密钥生命周期、敏感字段默认策略、旧 ZIP 迁移和恢复校验；在完成前将导出文件视为高敏感数据。依据：`WebDavSync.prepareBackupFile`/`restoreFromBackupFile`。
-3. 移除或严格脱敏 AI request/response 日志，并加回归测试避免提示词、消息和工具参数进入日志。依据：四类 Provider 的 request-body `Log`。
-4. 收紧 Web Server 安全默认值：优先 localhost-only；暴露到局域网时强制鉴权，并测试 token、密码变更、SSE、文件与工具审批路由。依据：`Settings` 默认值和 `WebApiModule`。
+1. 建立敏感数据资产清单与设备端保护方案，并为现有数据设计可回滚迁移。
+2. 重新定义备份、导出和系统迁移的安全模型，加入完整性、保密性与恢复校验。
+3. 实施日志最小化和统一脱敏，并用自动化测试防止敏感上下文进入日志。
+4. 为 Web Server、MCP、自动工具和 Headless Workflow 建立安全默认值、能力分级与不可绕过的高风险控制。
 5. 为 Room 1→29 的实际升级路径和“旧备份恢复后升级”建立 migration test matrix。依据：`AppDatabase.kt`、`app/schemas`、当前单一 migration test。
-6. 对所有高风险 Android 权限、exported 组件、无障碍/屏幕自动化、shell/SSH、MCP 及 headless workflow 做逐项威胁建模；不能只依赖正则 guard。依据：Manifest、`GenerationHandler`、`HardlineCommandGuard`、`WorkflowEngine`。
+6. 对所有高风险 Android 权限、exported 组件和设备控制能力做逐项威胁建模与真机验证。
 
 ### 建议处理
 
