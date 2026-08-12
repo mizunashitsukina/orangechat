@@ -7,6 +7,7 @@
 package me.rerere.rikkahub.data.sync
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.data.datastore.Settings
@@ -102,10 +103,18 @@ class BackupArchiveService(
                 json.decodeFromString<Settings>(SettingsJsonMigrator.migrate(source))
             },
             decodePluginSettings = { source -> json.decodeFromString<PluginSettingsExport>(source) },
+            restoreTargets = BackupRestoreTargets(
+                uploadsRoot = if (selection.includeFiles) uploadsRoot() else null,
+                skillsRoot = if (selection.includeFiles) skillsRoot() else null,
+                pluginsRoot = if (selection.includeFiles && selection.includePlugins) pluginsRoot() else null,
+                uploadsArchiveDirectory = FileFolders.UPLOAD,
+                skillsArchiveDirectory = FileFolders.SKILLS,
+                pluginsArchiveDirectory = PluginScanner.PLUGINS_DIR,
+            ),
         )
 
         try {
-            // All archive input is parsed and staged before the first write to application data.
+            // Archive input and every selected target path are validated before the first application-data write.
             settingsStore.update(staged.settings)
             if (selection.includeDatabase) restoreDatabase(staged.root)
             if (selection.includeFiles) {
@@ -200,7 +209,7 @@ class BackupArchiveService(
 
     private fun restoreUploads(staging: File) {
         val sourceRoot = staging.resolve(FileFolders.UPLOAD)
-        val targetRoot = File(context.filesDir, FileFolders.UPLOAD)
+        val targetRoot = uploadsRoot()
         restoreDirectory(sourceRoot, targetRoot) { relative ->
             BackupArchiveSecurity.resolveInside(targetRoot, relative)
         }
@@ -208,7 +217,7 @@ class BackupArchiveService(
 
     private fun restorePlugins(staging: File) {
         val sourceRoot = staging.resolve(PluginScanner.PLUGINS_DIR)
-        val targetRoot = PluginScanner(context).pluginsDir
+        val targetRoot = pluginsRoot()
         restoreDirectory(sourceRoot, targetRoot) { relative ->
             BackupArchiveSecurity.resolveInside(targetRoot, relative)
         }
@@ -217,7 +226,7 @@ class BackupArchiveService(
     private fun restoreSkills(staging: File) {
         val sourceRoot = staging.resolve(FileFolders.SKILLS)
         if (!sourceRoot.isDirectory) return
-        val skillsRoot = File(context.filesDir, FileFolders.SKILLS).apply { mkdirs() }
+        val skillsRoot = skillsRoot()
         sourceRoot.walkTopDown().filter { it.isFile }.forEach { source ->
             val relative = source.relativeTo(sourceRoot).invariantSeparatorsPath
             val skillName = relative.substringBefore('/', missingDelimiterValue = "")
@@ -229,6 +238,12 @@ class BackupArchiveService(
             copyStagedFile(source, target)
         }
     }
+
+    private fun uploadsRoot(): File = File(context.filesDir, FileFolders.UPLOAD)
+
+    private fun skillsRoot(): File = File(context.filesDir, FileFolders.SKILLS)
+
+    private fun pluginsRoot(): File = File(Environment.getExternalStorageDirectory(), PluginScanner.PLUGINS_DIR)
 
     private fun restoreDirectory(sourceRoot: File, targetRoot: File, targetFor: (String) -> File) {
         if (!sourceRoot.isDirectory) return

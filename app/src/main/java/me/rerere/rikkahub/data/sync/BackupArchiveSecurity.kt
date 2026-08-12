@@ -6,6 +6,7 @@
 
 package me.rerere.rikkahub.data.sync
 
+import me.rerere.rikkahub.data.files.SkillPaths
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -74,6 +75,15 @@ data class StagedBackupArchive<TSettings, TPluginSettings>(
     val totalExtractedBytes: Long,
 )
 
+data class BackupRestoreTargets(
+    val uploadsRoot: File? = null,
+    val skillsRoot: File? = null,
+    val pluginsRoot: File? = null,
+    val uploadsArchiveDirectory: String = "upload",
+    val skillsArchiveDirectory: String = "skills",
+    val pluginsArchiveDirectory: String = "Orangechat/plugins",
+)
+
 object BackupArchiveSecurity {
     fun validateEntryName(name: String): String {
         if (name.isEmpty() || name.indexOf('\u0000') >= 0) {
@@ -118,6 +128,7 @@ object BackupArchiveSecurity {
         limits: BackupArchiveLimits = BackupArchiveLimits(),
         decodeSettings: (String) -> TSettings,
         decodePluginSettings: (String) -> TPluginSettings,
+        restoreTargets: BackupRestoreTargets? = null,
     ): StagedBackupArchive<TSettings, TPluginSettings> {
         if (!archive.isFile || archive.length() > limits.maxCompressedBytes) {
             throw BackupArchiveException(BackupArchiveFailure.ARCHIVE_TOO_LARGE)
@@ -173,6 +184,8 @@ object BackupArchiveSecurity {
             if (!settingsFile.isFile) throw BackupArchiveException(BackupArchiveFailure.MISSING_SETTINGS)
             decodedSettings = try {
                 decodeSettings(readLimitedText(settingsFile, limits.maxSettingsJsonBytes))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: BackupArchiveException) {
                 throw e
             } catch (e: Exception) {
@@ -183,12 +196,16 @@ object BackupArchiveSecurity {
             if (pluginFile.exists()) {
                 pluginSettings = try {
                     decodePluginSettings(readLimitedText(pluginFile, limits.maxPluginSettingsJsonBytes))
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: BackupArchiveException) {
                     throw e
                 } catch (e: Exception) {
                     throw BackupArchiveException(BackupArchiveFailure.INVALID_PLUGIN_SETTINGS, e)
                 }
             }
+
+            restoreTargets?.let { preflightRestoreTargets(stagingRoot, it) }
 
             @Suppress("UNCHECKED_CAST")
             return StagedBackupArchive(
@@ -210,6 +227,49 @@ object BackupArchiveSecurity {
         } catch (e: Exception) {
             stagingRoot.deleteRecursively()
             throw BackupArchiveException(BackupArchiveFailure.INVALID_ARCHIVE, e)
+        }
+    }
+
+    fun preflightRestoreTargets(stagingRoot: File, targets: BackupRestoreTargets) {
+        targets.uploadsRoot?.let { targetRoot ->
+            preflightDirectoryTargets(
+                stagingRoot.resolve(targets.uploadsArchiveDirectory),
+                targetRoot,
+            ) { root, relative -> resolveInside(root, relative) }
+        }
+        targets.pluginsRoot?.let { targetRoot ->
+            preflightDirectoryTargets(
+                stagingRoot.resolve(targets.pluginsArchiveDirectory),
+                targetRoot,
+            ) { root, relative -> resolveInside(root, relative) }
+        }
+        targets.skillsRoot?.let { skillsRoot ->
+            val sourceRoot = stagingRoot.resolve(targets.skillsArchiveDirectory)
+            if (!sourceRoot.isDirectory) return@let
+            sourceRoot.walkTopDown().filter { it.isFile }.forEach { source ->
+                val relative = source.relativeTo(sourceRoot).invariantSeparatorsPath
+                val separator = relative.indexOf('/')
+                if (separator <= 0 || separator == relative.lastIndex) {
+                    throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+                }
+                val skillName = relative.substring(0, separator)
+                val skillRelativePath = relative.substring(separator + 1)
+                val skillDir = SkillPaths.resolveSkillDir(skillsRoot, skillName)
+                    ?: throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+                SkillPaths.resolveSkillFile(skillDir, skillRelativePath)
+                    ?: throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+            }
+        }
+    }
+
+    private fun preflightDirectoryTargets(
+        sourceRoot: File,
+        targetRoot: File,
+        resolveTarget: (File, String) -> File,
+    ) {
+        if (!sourceRoot.isDirectory) return
+        sourceRoot.walkTopDown().filter { it.isFile }.forEach { source ->
+            resolveTarget(targetRoot, source.relativeTo(sourceRoot).invariantSeparatorsPath)
         }
     }
 

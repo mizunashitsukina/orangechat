@@ -58,6 +58,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.WebDavConfig
@@ -270,20 +271,23 @@ fun WebDavTab(
                 onClick = {
                     scope.launch {
                         isBackingUp = true
-                        runCatching {
+                        try {
                             vm.backup()
                             vm.loadBackupFileItems()
                             toaster.show(
                                 context.getString(R.string.backup_page_backup_success),
                                 type = ToastType.Success
                             )
-                        }.onFailure {
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
                             toaster.show(
                                 context.getString(R.string.backup_page_unknown_error),
                                 type = ToastType.Error
                             )
+                        } finally {
+                            isBackingUp = false
                         }
-                        isBackingUp = false
                     }
                 },
                 enabled = !isBackingUp
@@ -361,7 +365,7 @@ fun WebDavTab(
                                 onRestore = { restoreItem ->
                                     scope.launch {
                                         restoringItemId = restoreItem.displayName
-                                        runCatching {
+                                        try {
                                             vm.restore(item = restoreItem)
                                             toaster.show(
                                                 context.getString(R.string.backup_page_restore_success),
@@ -369,7 +373,9 @@ fun WebDavTab(
                                             )
                                             showBackupFiles = false
                                             onShowRestartDialog()
-                                        }.onFailure {
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_restore_failed,
@@ -377,8 +383,9 @@ fun WebDavTab(
                                                 ),
                                                 type = ToastType.Error
                                             )
+                                        } finally {
+                                            restoringItemId = null
                                         }
-                                        restoringItemId = null
                                     }
                                 },
                             )

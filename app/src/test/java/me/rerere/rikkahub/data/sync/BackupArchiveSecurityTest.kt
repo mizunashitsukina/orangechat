@@ -11,11 +11,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeNoException
 import org.junit.Test
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
+import java.util.concurrent.CancellationException
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -76,6 +80,134 @@ class BackupArchiveSecurityTest {
         assertNotNull(SkillPaths.resolveSkillFile(skill!!, "references/info.md"))
         assertNull(SkillPaths.resolveSkillDir(skillsRoot, "../outside"))
         assertNull(SkillPaths.resolveSkillFile(skill, "../../outside"))
+    }
+
+    @Test
+    fun singleLevelSkillFileFailsTargetPreflightBeforeItReturns() = withTempDir { root ->
+        val archive = zip(root, mapOf(
+            "settings.json" to "settings",
+            "skills/orphan.txt" to "invalid",
+        ))
+        val staging = root.resolve("staging")
+
+        assertFails(BackupArchiveFailure.INVALID_ENTRY_PATH) {
+            preflight(archive, staging, restoreTargets(root))
+        }
+        assertFalse(staging.exists())
+    }
+
+    @Test
+    fun skillNameRejectedBySkillPathsFailsTargetPreflight() = withTempDir { root ->
+        val marker = "secret-invalid-skill"
+        val archive = zip(root, mapOf(
+            "settings.json" to "settings",
+            "skills/ /$marker.txt" to "invalid",
+        ))
+        val staging = root.resolve("staging")
+        val failure = try {
+            preflight(archive, staging, restoreTargets(root))
+            fail("Expected invalid skill rejection")
+            null
+        } catch (e: BackupArchiveException) {
+            e
+        }
+
+        assertEquals(BackupArchiveFailure.INVALID_ENTRY_PATH, failure!!.reason)
+        assertFalse(failure.message.orEmpty().contains(marker))
+        assertFalse(staging.exists())
+    }
+
+    @Test
+    fun validSkillAndRealUploadAndPluginTargetsPassPreflight() = withTempDir { root ->
+        val archive = zip(root, mapOf(
+            "settings.json" to "settings",
+            "upload/nested/file.txt" to "upload",
+            "skills/example/references/info.md" to "skill",
+            "Orangechat/plugins/example/index.js" to "plugin",
+        ))
+        val staging = root.resolve("staging")
+
+        val result = preflight(archive, staging, restoreTargets(root))
+
+        assertTrue(result.root.isDirectory)
+        assertFalse(root.resolve("application/upload/nested/file.txt").exists())
+        assertFalse(root.resolve("application/plugins/example/index.js").exists())
+        result.root.deleteRecursively()
+    }
+
+    @Test
+    fun existingSymlinkCannotEscapeRealTargetRoot() = withTempDir { root ->
+        val applicationRoot = root.resolve("application").apply { mkdirs() }
+        val uploadsRoot = applicationRoot.resolve("upload").apply { mkdirs() }
+        val outside = root.resolve("outside").apply { mkdirs() }
+        try {
+            Files.createSymbolicLink(uploadsRoot.resolve("linked").toPath(), outside.toPath())
+        } catch (e: UnsupportedOperationException) {
+            assumeNoException(e)
+        } catch (e: IOException) {
+            assumeNoException(e)
+        } catch (e: SecurityException) {
+            assumeNoException(e)
+        }
+        val archive = zip(root, mapOf(
+            "settings.json" to "settings",
+            "upload/linked/escape.txt" to "invalid",
+        ))
+
+        assertFails(BackupArchiveFailure.INVALID_ENTRY_PATH) {
+            preflight(archive, root.resolve("staging"), restoreTargets(root))
+        }
+        assertFalse(outside.resolve("escape.txt").exists())
+    }
+
+    @Test
+    fun existingSymlinkCannotEscapeRealPluginTargetRoot() = withTempDir { root ->
+        val applicationRoot = root.resolve("application").apply { mkdirs() }
+        val pluginsRoot = applicationRoot.resolve("plugins").apply { mkdirs() }
+        val outside = root.resolve("outside").apply { mkdirs() }
+        try {
+            Files.createSymbolicLink(pluginsRoot.resolve("linked").toPath(), outside.toPath())
+        } catch (e: UnsupportedOperationException) {
+            assumeNoException(e)
+        } catch (e: IOException) {
+            assumeNoException(e)
+        } catch (e: SecurityException) {
+            assumeNoException(e)
+        }
+        val archive = zip(root, mapOf(
+            "settings.json" to "settings",
+            "Orangechat/plugins/linked/escape.txt" to "invalid",
+        ))
+
+        assertFails(BackupArchiveFailure.INVALID_ENTRY_PATH) {
+            preflight(archive, root.resolve("staging"), restoreTargets(root))
+        }
+        assertFalse(outside.resolve("escape.txt").exists())
+    }
+
+    @Test
+    fun skillRelativePathSymlinkCannotEscapeSkillDirectory() = withTempDir { root ->
+        val applicationRoot = root.resolve("application").apply { mkdirs() }
+        val skillDir = applicationRoot.resolve("skills/example").apply { mkdirs() }
+        val outside = root.resolve("outside").apply { mkdirs() }
+        try {
+            Files.createSymbolicLink(skillDir.resolve("linked").toPath(), outside.toPath())
+        } catch (e: UnsupportedOperationException) {
+            assumeNoException(e)
+        } catch (e: IOException) {
+            assumeNoException(e)
+        } catch (e: SecurityException) {
+            assumeNoException(e)
+        }
+        val archive = zip(root, mapOf(
+            "settings.json" to "settings",
+            "skills/example/linked/escape.txt" to "invalid",
+        ))
+
+        assertFails(BackupArchiveFailure.INVALID_ENTRY_PATH) {
+            preflight(archive, root.resolve("staging"), restoreTargets(root))
+        }
+        assertFalse(outside.resolve("escape.txt").exists())
     }
 
     @Test
@@ -203,19 +335,76 @@ class BackupArchiveSecurityTest {
         assertFalse(failure.toString().contains(marker))
     }
 
+    @Test
+    fun settingsDecodeCancellationPropagatesAndCleansStaging() = withTempDir { root ->
+        val cancellation = CancellationException("secret-cancellation-marker")
+        val staging = root.resolve("staging")
+        val archive = zip(root, mapOf("settings.json" to "settings"))
+
+        val thrown = try {
+            BackupArchiveSecurity.stageAndPreflight(
+                archive,
+                staging,
+                limits(),
+                decodeSettings = { throw cancellation },
+                decodePluginSettings = { it },
+            )
+            fail("Expected cancellation")
+            null
+        } catch (e: CancellationException) {
+            e
+        }
+
+        assertSame(cancellation, thrown)
+        assertFalse(staging.exists())
+    }
+
+    @Test
+    fun pluginSettingsDecodeCancellationPropagatesAndCleansStaging() = withTempDir { root ->
+        val cancellation = CancellationException("secret-cancellation-marker")
+        val staging = root.resolve("staging")
+        val archive = zip(root, mapOf(
+            "settings.json" to "settings",
+            "plugin_settings.json" to "plugins",
+        ))
+
+        val thrown = try {
+            BackupArchiveSecurity.stageAndPreflight(
+                archive,
+                staging,
+                limits(),
+                decodeSettings = { it },
+                decodePluginSettings = { throw cancellation },
+            )
+            fail("Expected cancellation")
+            null
+        } catch (e: CancellationException) {
+            e
+        }
+
+        assertSame(cancellation, thrown)
+        assertFalse(staging.exists())
+    }
+
     private fun assertUnsafe(name: String) {
         assertFails(BackupArchiveFailure.INVALID_ENTRY_PATH) {
             BackupArchiveSecurity.validateEntryName(name)
         }
     }
 
-    private fun preflight(archive: File, staging: File, customLimits: BackupArchiveLimits = limits()) =
+    private fun preflight(
+        archive: File,
+        staging: File,
+        restoreTargets: BackupRestoreTargets? = null,
+        customLimits: BackupArchiveLimits = limits(),
+    ) =
         BackupArchiveSecurity.stageAndPreflight(
             archive,
             staging,
             customLimits,
             decodeSettings = { it },
             decodePluginSettings = { it },
+            restoreTargets = restoreTargets,
         )
 
     private fun assertPreflightFails(
@@ -224,8 +413,17 @@ class BackupArchiveSecurityTest {
         reason: BackupArchiveFailure,
         customLimits: BackupArchiveLimits = limits(),
     ) {
-        assertFails(reason) { preflight(archive, staging, customLimits) }
+        assertFails(reason) { preflight(archive, staging, customLimits = customLimits) }
         assertFalse(staging.exists())
+    }
+
+    private fun restoreTargets(root: File): BackupRestoreTargets {
+        val applicationRoot = root.resolve("application")
+        return BackupRestoreTargets(
+            uploadsRoot = applicationRoot.resolve("upload"),
+            skillsRoot = applicationRoot.resolve("skills"),
+            pluginsRoot = applicationRoot.resolve("plugins"),
+        )
     }
 
     private fun assertFails(reason: BackupArchiveFailure, block: () -> Unit) {

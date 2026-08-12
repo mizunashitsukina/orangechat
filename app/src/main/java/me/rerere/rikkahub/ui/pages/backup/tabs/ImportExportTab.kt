@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ui.CardGroup
@@ -68,7 +69,7 @@ fun ImportExportTab(
             scope.launch {
                 isExporting = true
                 var exportFile: File? = null
-                runCatching {
+                try {
                     // 导出文件
                     exportFile = vm.exportToFile()
 
@@ -88,15 +89,17 @@ fun ImportExportTab(
                         context.getString(R.string.backup_page_backup_success),
                         type = ToastType.Success
                     )
-                }.onFailure {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
                     toaster.show(
                         context.getString(R.string.backup_page_restore_failed, ""),
                         type = ToastType.Error
                     )
-                }.also {
+                } finally {
                     exportFile?.delete()
+                    isExporting = false
                 }
-                isExporting = false
             }
         }
     }
@@ -109,7 +112,7 @@ fun ImportExportTab(
             scope.launch {
                 isRestoring = true
                 var tempFile: File? = null
-                runCatching {
+                try {
                     when (importType) {
                         "local" -> {
                             tempFile = File.createTempFile("backup-import-", ".zip", context.cacheDir)
@@ -168,15 +171,17 @@ fun ImportExportTab(
                         type = ToastType.Success
                     )
                     onShowRestartDialog()
-                }.onFailure {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
                     toaster.show(
                         context.getString(R.string.backup_page_restore_failed, ""),
                         type = ToastType.Error
                     )
-                }.also {
+                } finally {
                     tempFile?.delete()
+                    isRestoring = false
                 }
-                isRestoring = false
             }
         }
     }
