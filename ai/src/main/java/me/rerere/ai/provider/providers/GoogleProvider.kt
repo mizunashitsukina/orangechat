@@ -134,7 +134,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             val response = client.newCall(request).await()
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: error("empty body")
-                Log.d(TAG, "listModels: $body")
                 val bodyObject = json.parseToJsonElement(body).jsonObject
                 val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
 
@@ -244,8 +243,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -253,8 +250,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.i(TAG, "onEvent: $data")
-
                 try {
                     val jsonData = json.parseToJsonElement(data).jsonObject
                     val reason =
@@ -297,8 +292,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                     trySend(messageChunk)
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    println("[onEvent] 解析错误: $data")
+                    Log.w(TAG, "Google streamText event parse failed: ${e.javaClass.simpleName}")
                 }
             }
 
@@ -309,15 +303,15 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             ) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.message}")
+                val statusCode = response?.code
+                val errorType = t?.javaClass?.simpleName ?: "UnknownError"
+                Log.e(TAG, "Google streamText failed: HTTP $statusCode, error=$errorType")
 
                 try {
                     if (t == null && response != null) {
                         val bodyStr = response.body.stringSafe()
                         if (!bodyStr.isNullOrEmpty()) {
                             val bodyElement = json.parseToJsonElement(bodyStr)
-                            println(bodyElement)
                             if (bodyElement is JsonObject) {
                                 exception = Exception(
                                     bodyElement["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
@@ -329,7 +323,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         }
                     }
                 } catch (e: Throwable) {
-                    e.printStackTrace()
+                    Log.w(TAG, "Google error parsing failed: ${e.javaClass.simpleName}")
                     exception = e
                 } finally {
                     close(exception ?: Exception("Stream failed"))
@@ -337,7 +331,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
 
             override fun onClosed(eventSource: EventSource) {
-                println("[onClosed] 连接已关闭")
                 close()
             }
         }
@@ -346,7 +339,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource")
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta, 导致回复中间缺字 (#1295), 因此缓冲必须无界。
@@ -530,7 +522,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
-        Log.i(TAG, "parseMessage: $groundingMetadata")
         val annotations = parseSearchGroundingMetadata(groundingMetadata)
 
         return UIMessage(
@@ -552,7 +543,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 url = uri
             )
         }
-        Log.i(TAG, "parseSearchGroundingMetadata: $chunks")
         return chunks
     }
 

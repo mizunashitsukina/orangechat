@@ -111,10 +111,10 @@ class GenerationHandler(
         var messages: List<UIMessage> = messages
  
         for (stepIndex in 0 until maxSteps) {
-            Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
+            Log.i(TAG, "AI operation started: streamText")
  
             val toolsInternal = buildList {
-                Log.i(TAG, "generateInternal: build tools($assistant)")
+                Log.i(TAG, "generateInternal: building tools")
                 if (assistant?.enableMemory == true) {
                     val memoryAssistantId = if (assistant.useGlobalMemory) {
                         MemoryRepository.GLOBAL_MEMORY_ID
@@ -256,7 +256,7 @@ class GenerationHandler(
                 toolsToProcess = updatedTools
             } else {
                 // Resuming after user interaction - use the resumable tools directly.
-                Log.i(TAG, "generateText: resuming with ${pendingTools.size} resumable tools")
+                Log.i(TAG, "AI operation resumed: generateText")
                 toolsToProcess = messages.last().getTools().filter { it.canResumeExecution }
             }
  
@@ -307,11 +307,11 @@ class GenerationHandler(
                             }.getOrElse {
                                 error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
                             }
-                            Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
+                            Log.i(TAG, "generateText: executing tool")
                             val result = toolDef.execute(args)
                             executedTools += tool.copy(output = result)
                         }.onFailure {
-                            it.printStackTrace()
+                            Log.w(TAG, "Tool execution failed: ${it.javaClass.simpleName}")
                             executedTools += tool.copy(
                                 output = listOf(
                                     UIMessagePart.Text(
@@ -403,9 +403,6 @@ class GenerationHandler(
                     val externalMemoryConfigs = settings.externalMemories.filter {
                         it.enabled && it.id in assistant.externalMemoryIds
                     }
-                    externalMemoryConfigs.forEach { config ->
-                        Log.i(TAG, "ExternalMemory config: name=${config.name}, url=${config.supabaseUrl}, table=${config.tableName}, summaryTable=${config.summariesTableName}, embeddingModelId=${config.embeddingModelId}, autoSaveDiarySummary=${config.autoSaveDiarySummary}")
-                    }
                     if (externalMemoryConfigs.isNotEmpty()) {
                         val lastUserMessage = messages.lastOrNull { it.role == MessageRole.USER }
                         val queryText = lastUserMessage?.toText()?.take(200)?.trim() ?: ""
@@ -442,7 +439,7 @@ class GenerationHandler(
                                                             recalledSummaries.forEach { summary ->
                                                                 recalled.add(summary.content)
                                                             }
-                                                            Log.d(TAG, "Vector recall ${recalledSummaries.size} summaries from ${config.name}")
+                                                            Log.d(TAG, "AI context operation completed: vectorRecall")
                                                         }
                                                     }
                                                 }
@@ -471,10 +468,10 @@ class GenerationHandler(
                                             }
                                             recalled
                                         }.onFailure {
-                                            Log.w(TAG, "External memory recall failed for ${config.name}", it)
+                                            Log.w(TAG, "External memory recall failed: ${it.javaClass.simpleName}")
                                         }.getOrNull()
                                     } ?: run {
-                                        Log.w(TAG, "External memory recall timed out for ${config.name}")
+                                        Log.w(TAG, "External memory recall timed out")
                                         null
                                     }
                                 }
@@ -491,7 +488,7 @@ class GenerationHandler(
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "External memory recall failed", e)
+                    Log.w(TAG, "External memory recall failed: ${e.javaClass.simpleName}")
                 }
  
                 if (assistant.enableRecentChatsReference) {
@@ -582,10 +579,8 @@ class GenerationHandler(
         if (stream) {
             aiLoggingManager.addLog(
                 AILogging.Generation(
-                    params = params,
-                    messages = messages,
-                    providerSetting = provider,
-                    stream = true
+                    providerType = provider.javaClass.simpleName,
+                    operation = "streamText"
                 )
             )
             providerImpl.streamText(
@@ -608,10 +603,8 @@ class GenerationHandler(
         } else {
             aiLoggingManager.addLog(
                 AILogging.Generation(
-                    params = params,
-                    messages = messages,
-                    providerSetting = provider,
-                    stream = false
+                    providerType = provider.javaClass.simpleName,
+                    operation = "generateText"
                 )
             )
             val chunk = providerImpl.generateText(
@@ -753,4 +746,3 @@ private fun buildCodeBlockPrompt(): String = buildString {
     appendLine("   - The `edits` mode applies search/replace to the files from your previous `write_files` call. Files not mentioned in `edits` keep their content unchanged.")
     appendLine("   - Always use actual filenames (e.g. `MainActivity.kt`) as code block language tags, not just language names (e.g. `kotlin`).")
 }
- 

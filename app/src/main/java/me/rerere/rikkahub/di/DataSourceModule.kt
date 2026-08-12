@@ -50,7 +50,6 @@ import me.rerere.rikkahub.data.sync.S3Sync
 import okhttp3.Dispatcher
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import org.koin.dsl.module
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -78,7 +77,7 @@ val dataSourceModule = module {
                             if (!success) {
                                 android.util.Log.e(
                                     "DataSourceModule",
-                                    "jieba_dict failed: $result, path=${dictDir.absolutePath}"
+                                    "jieba_dict initialization failed"
                                 )
                             }
                         }
@@ -247,9 +246,6 @@ val dataSourceModule = module {
             }
             .addNetworkInterceptor(RequestLoggingInterceptor())
             .addInterceptor(AIRequestInterceptor())
-            .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.HEADERS
-            })
             .build().also { SearchService.init(it, get()) }
     }
 

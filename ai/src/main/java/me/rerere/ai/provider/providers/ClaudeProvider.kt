@@ -123,8 +123,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
             throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
@@ -171,12 +169,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        requestBody["messages"]!!.jsonArray.forEach {
-            Log.i(TAG, "streamText: $it")
-        }
-
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -184,7 +176,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: type=$type, data=$data")
                 if (data == "[DONE]") {
                     return
                 }
@@ -234,19 +225,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                Log.e(TAG, "onFailure: ${t?.javaClass?.name} ${t?.message} / $response")
+                val statusCode = response?.code
+                val errorType = t?.javaClass?.simpleName ?: "UnknownError"
+                Log.e(TAG, "Claude streamText failed: HTTP $statusCode, error=$errorType")
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        Log.i(TAG, "Error response: $bodyElement")
                         exception = bodyElement.parseErrorDetail()
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
+                    Log.w(TAG, "Claude error parsing failed: ${e.javaClass.simpleName}")
                 } finally {
                     close(exception)
                 }
@@ -483,7 +473,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     put("data", encoded.base64)
                 })
             }.onFailure {
-                Log.w(TAG, "encode image failed: $url", it)
+                Log.w(TAG, "Claude image encoding failed: ${it.javaClass.simpleName}")
                 put("type", "text")
                 put("text", "")
             }
@@ -547,8 +537,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
 
                 "redacted_thinking" -> {
-                    val data = block["data"]?.jsonPrimitiveOrNull?.contentOrNull
-                    println(data)
+                    // Redacted thinking content is intentionally not surfaced or logged.
                 }
 
                 "tool_use" -> {

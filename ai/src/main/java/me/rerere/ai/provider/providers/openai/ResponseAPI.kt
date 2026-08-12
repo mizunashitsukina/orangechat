@@ -93,15 +93,12 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
-
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
             throw Exception("Failed to get response: ${response.code} ${response.body.string()}")
         }
 
         val bodyStr = response.body?.string() ?: ""
-        Log.i(TAG, "generateText: $bodyStr")
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
         val output = parseResponseOutput(bodyJson)
 
@@ -130,8 +127,6 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -143,22 +138,11 @@ class ResponseAPI(
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: $id/$type $data")
                 val chunkJson = try {
                     json.parseToJsonElement(data).jsonObject
                 } catch (e: Throwable) {
                     // 上游真的发了坏数据时不要让整个流直接崩掉裸抛 Unexpected EOF。
-                    // 记录长度和前后片段便于定位, 但避免把整个超长内容打进日志。
-                    val preview = if (data.length > 200) {
-                        "${data.take(100)}...(${data.length} chars)...${data.takeLast(100)}"
-                    } else {
-                        data
-                    }
-                    Log.w(
-                        TAG,
-                        "onEvent: failed to parse SSE data (len=${data.length}, preview=$preview)",
-                        e
-                    )
+                    Log.w(TAG, "OpenAI Responses stream event parse failed: ${e.javaClass.simpleName}")
                     close(
                         Exception("Failed to parse stream data: ${e.message} (data length=${data.length})", e)
                     )
@@ -176,20 +160,18 @@ class ResponseAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.javaClass?.name} ${t?.message} / $response")
+                val statusCode = response?.code
+                val errorType = t?.javaClass?.simpleName ?: "UnknownError"
+                Log.e(TAG, "OpenAI Responses stream failed: HTTP $statusCode, error=$errorType")
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        println(bodyElement)
                         exception = bodyElement.parseErrorDetail()
-                        Log.i(TAG, "onFailure: $exception")
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
+                    Log.w(TAG, "OpenAI Responses error parsing failed: ${e.javaClass.simpleName}")
                 } finally {
                     close(exception)
                 }
@@ -204,7 +186,6 @@ class ResponseAPI(
             .newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource ")
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta, 导致回复中间缺字 (#1295), 因此缓冲必须无界。
@@ -468,7 +449,7 @@ class ResponseAPI(
                                         put("type", if (role == MessageRole.USER) "input_image" else "output_image")
                                         put("image_url", encodedImage.base64)
                                     }.onFailure {
-                                        it.printStackTrace()
+                                        Log.w(TAG, "OpenAI Responses image encoding failed: ${it.javaClass.simpleName}")
                                         put("type", "input_text")
                                         put("text", "Error: Failed to encode image to base64")
                                     }
@@ -712,7 +693,6 @@ class ResponseAPI(
     }
 
     private fun parseResponseOutput(jsonObject: JsonObject): MessageChunk {
-        println(jsonObject)
         val outputs = jsonObject["output"]?.jsonArray ?: error("output not found")
         val parts = arrayListOf<UIMessagePart>()
 

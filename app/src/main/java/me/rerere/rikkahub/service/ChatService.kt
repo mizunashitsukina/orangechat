@@ -232,7 +232,7 @@ class ChatService(
             Log.i(TAG, "Lifecycle observer added")
         } catch (e: Exception) {
             // 例如 ProcessLifecycleOwner 尚未就绪等异常边界, 记日志不崩
-            Log.e(TAG, "Failed to add lifecycle observer", e)
+            Log.e(TAG, "Lifecycle observer add failed: ${e.javaClass.simpleName}")
         }
     }
 
@@ -268,7 +268,7 @@ class ChatService(
                     Log.i(TAG, "Cancelled pending lifecycle observer add (cleanup before add)")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to remove lifecycle observer", e)
+                Log.e(TAG, "Lifecycle observer removal failed: ${e.javaClass.simpleName}")
             }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -296,7 +296,7 @@ class ChatService(
                 onIdle = { removeSession(it) }
             ).also {
                 _sessionsVersion.value++
-                Log.i(TAG, "createSession: $id (total: ${sessions.size + 1})")
+                Log.i(TAG, "Chat session created")
             }
         }
     }
@@ -304,13 +304,13 @@ class ChatService(
     private fun removeSession(conversationId: Uuid) {
         val session = sessions[conversationId] ?: return
         if (session.isInUse) {
-            Log.d(TAG, "removeSession: skipped $conversationId (still in use)")
+            Log.d(TAG, "Chat session removal skipped: still in use")
             return
         }
         if (sessions.remove(conversationId, session)) {
             session.cleanup()
             _sessionsVersion.value++
-            Log.i(TAG, "removeSession: $conversationId (remaining: ${sessions.size})")
+            Log.i(TAG, "Chat session removed")
         }
     }
 
@@ -413,7 +413,7 @@ class ChatService(
                         me.rerere.rikkahub.data.service.ProactiveMessageService.resetTimer(context, proactiveSetting)
                     }
                 } catch (e: Exception) {
-                    android.util.Log.w("ChatService", "Failed to reset proactive timer", e)
+                    android.util.Log.w("ChatService", "Proactive timer reset failed: ${e.javaClass.simpleName}")
                 }
 
                 // 读取最新状态 -> 追加用户消息 -> 落库，整体加锁。
@@ -458,11 +458,11 @@ class ChatService(
                         try {
                             pluginLoader.callEvent("message_sent", eventData)
                         } catch (e: Exception) {
-                            Log.w(TAG, "Failed to trigger message_sent event", e)
+                            Log.w(TAG, "message_sent event failed: ${e.javaClass.simpleName}")
                         }
                     }
                 }.onFailure { e ->
-                    Log.w(TAG, "Failed to trigger message_sent event", e)
+                    Log.w(TAG, "message_sent event failed: ${e.javaClass.simpleName}")
                 }
 
                 // 保存用户消息到外置记忆库（fire-and-forget，不阻塞后续生成流程）
@@ -486,13 +486,13 @@ class ChatService(
                                         content = messageText,
                                     )
                                 }.onFailure {
-                                    Log.w(TAG, "Failed to save user message to external memory ${config.name}", it)
+                                    Log.w(TAG, "External memory save failed: ${it.javaClass.simpleName}")
                                 }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to save user message to external memory", e)
+                    Log.w(TAG, "External memory save failed: ${e.javaClass.simpleName}")
                 }
 
                 // 开始补全
@@ -502,8 +502,7 @@ class ChatService(
 
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
-                e.printStackTrace()
-                Log.e(TAG, "sendMessage failed, conversationId=$conversationId", e)
+                Log.e(TAG, "AI sendMessage failed: ${e.javaClass.simpleName}")
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
             }
         }
@@ -517,7 +516,7 @@ class ChatService(
             try {
                 appendProactiveAiMessageUnderLock(conversationId, aiMessage)
             } catch (e: Exception) {
-                Log.e(TAG, "addProactiveMessage failed, conversationId=$conversationId", e)
+                Log.e(TAG, "Proactive message append failed: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -540,7 +539,7 @@ class ChatService(
         // 表现为消息分支 <2/2> 错乱、内容被覆盖。
         session.getJob()?.let { job ->
             if (job.isActive) {
-                Log.i(TAG, "appendProactiveAiMessageUnderLock: waiting for ongoing generation to finish, conversationId=$conversationId")
+                Log.i(TAG, "Proactive message append waiting for active generation")
                 job.join()
             }
         }
@@ -576,7 +575,7 @@ class ChatService(
                 // 2) 保证后面 addProactiveMessage 追加反馈时不会跟还在跑的流式生成发生位置错位。
                 session.getJob()?.let { job ->
                     if (job.isActive) {
-                        Log.i(TAG, "notifyVoiceCallDeclined: waiting for ongoing generation to finish, conversationId=$conversationId")
+                        Log.i(TAG, "AI operation waiting for active generation")
                         job.join()
                     }
                 }
@@ -589,12 +588,12 @@ class ChatService(
                     ?: settings.getCurrentAssistant()
                 val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
                 if (model == null) {
-                    Log.e(TAG, "notifyVoiceCallDeclined: no model found, conversationId=$conversationId")
+                    Log.e(TAG, "AI generateText failed: model not configured")
                     return@launch
                 }
                 val provider = model.findProvider(settings.providers)
                 if (provider == null) {
-                    Log.e(TAG, "notifyVoiceCallDeclined: no provider found, conversationId=$conversationId, modelId=${model.id}")
+                    Log.e(TAG, "AI generateText failed: provider not configured")
                     return@launch
                 }
                 val providerHandler = providerManager.getProviderByType(provider)
@@ -638,7 +637,7 @@ class ChatService(
 
                 val replyText = result.choices[0].message?.toText()?.trim().orEmpty()
                 if (replyText.isBlank()) {
-                    Log.w(TAG, "notifyVoiceCallDeclined: empty reply, conversationId=$conversationId")
+                    Log.w(TAG, "AI generateText completed with empty response")
                     return@launch
                 }
 
@@ -654,7 +653,7 @@ class ChatService(
                     node.messages.any { it.role == MessageRole.USER }
                 }
                 if (userSentNewMessage) {
-                    Log.i(TAG, "notifyVoiceCallDeclined: user already sent a new message during generation, skip. conversationId=$conversationId")
+                    Log.i(TAG, "AI operation skipped: conversation changed")
                     return@launch
                 }
 
@@ -673,7 +672,7 @@ class ChatService(
                     sendGenerationDoneNotification(conversationId, senderName)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "notifyVoiceCallDeclined failed, conversationId=$conversationId", e)
+                Log.e(TAG, "AI generateText failed: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -735,7 +734,7 @@ class ChatService(
 
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
-                Log.e(TAG, "regenerateAtMessage failed, conversationId=$conversationId", e)
+                Log.e(TAG, "AI regenerate failed: ${e.javaClass.simpleName}")
                 addError(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
             }
         }
@@ -801,7 +800,7 @@ class ChatService(
 
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
-                Log.e(TAG, "handleToolApproval failed, conversationId=$conversationId, toolCallId=$toolCallId", e)
+                Log.e(TAG, "AI tool approval handling failed: ${e.javaClass.simpleName}")
                 addError(e, conversationId, title = context.getString(R.string.error_title_tool_approval))
             }
         }
@@ -957,10 +956,8 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
             // 取消 Live Update 通知
             cancelLiveUpdateNotification(conversationId)
 
-            it.printStackTrace()
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
-            Logging.log(TAG, "handleMessageComplete: $it")
-            Logging.log(TAG, it.stackTraceToString())
+            Logging.log(TAG, "AI streamText failed: ${it.javaClass.simpleName}")
         }.onSuccess {
             val finalConversation = session.saveMutex.withLock {
                 val latest = getConversationFlow(conversationId).value
@@ -974,7 +971,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                 val messageText = lastAssistantMessage?.toText() ?: ""
                 launchNeteaseCloudMusic(messageText)
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to launch NetEase Cloud Music", e)
+                Log.w(TAG, "Music app launch failed: ${e.javaClass.simpleName}")
             }
 
             // 检测并执行 [JUMP] 标记 - 正常聊天中的切屏（AI总是可以跳转，不需要开关）
@@ -1018,10 +1015,10 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                         putExtra("conversationId", conversationId.toString())
                     }
                     context.startActivity(jumpIntent)
-                    Log.d(TAG, "[JUMP] detected in normal chat, force jump to conversation $conversationId")
+                    Log.d(TAG, "Conversation navigation completed")
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to handle [JUMP] in normal chat", e)
+                Log.w(TAG, "Conversation navigation failed: ${e.javaClass.simpleName}")
             }
 
             // 触发 message_received 事件钩子
@@ -1042,11 +1039,11 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                     try {
                         pluginLoader.callEvent("message_received", eventData)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to trigger message_received event", e)
+                        Log.w(TAG, "message_received event failed: ${e.javaClass.simpleName}")
                     }
                 }
             }.onFailure { e ->
-                Log.w(TAG, "Failed to trigger message_received event", e)
+                Log.w(TAG, "message_received event failed: ${e.javaClass.simpleName}")
             }
 
             launchWithConversationReference(conversationId) {
@@ -1077,7 +1074,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                                             content = messageText,
                                         )
                                     }.onFailure {
-                                        Log.w(TAG, "Failed to save assistant message to external memory ${config.name}", it)
+                                        Log.w(TAG, "External memory save failed: ${it.javaClass.simpleName}")
                                     }
                                 }
                             }
@@ -1085,7 +1082,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to save assistant message to external memory", e)
+                Log.w(TAG, "External memory save failed: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -1096,7 +1093,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
         if (workspace.shellStatus != WorkspaceShellStatus.READY.name) {
             Log.d(
                 TAG,
-                "createWorkspaceToolsIfReady: skip workspace tools, workspace=$workspaceId, status=${workspace.shellStatus}"
+                "Workspace tool creation skipped: workspace not ready"
             )
             return emptyList()
         }
@@ -1211,8 +1208,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                 }
             }
         }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "generateTitle failed, conversationId=$conversationId", it)
+            Log.e(TAG, "AI generateTitle failed: ${it.javaClass.simpleName}")
             addError(
                 error = it,
                 conversationId = conversationId,
@@ -1269,8 +1265,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                 )
             }
         }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "generateSuggestion failed, conversationId=$conversationId", it)
+            Log.e(TAG, "AI generateSuggestion failed: ${it.javaClass.simpleName}")
         }
     }
 
@@ -1533,7 +1528,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
         }
         if (deletedFiles.isNotEmpty()) {
             filesManager.deleteChatFiles(deletedFiles)
-            Log.w(TAG, "checkFilesDelete: $deletedFiles")
+            Log.w(TAG, "Conversation file cleanup completed: count=${deletedFiles.size}")
         }
     }
 
@@ -1855,14 +1850,14 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                 setPackage("com.netease.cloudmusic")
             }
             context.startActivity(intent)
-            Logging.log(TAG, "Launched NetEase Cloud Music, songId=$songId, uri=$uri")
+            Logging.log(TAG, "Music app launch succeeded")
         }.onFailure { e ->
             // 兜底 1：去掉包名限制（极少数定制 ROM 带 package 会被拦截）
             runCatching {
                 val fallback = Intent(Intent.ACTION_VIEW, uri.toUri())
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(fallback)
-                Logging.log(TAG, "Launched NetEase Cloud Music (no package), songId=$songId")
+                Logging.log(TAG, "Music app fallback launch succeeded")
             }.onFailure {
                 // 兜底 2：orpheuswidget:// scheme（部分版本只认这个）
                 runCatching {
@@ -1870,9 +1865,9 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                     val widgetIntent = Intent(Intent.ACTION_VIEW, widgetUri.toUri())
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(widgetIntent)
-                    Logging.log(TAG, "Launched NetEase Cloud Music (widget scheme), songId=$songId")
+                    Logging.log(TAG, "Music app widget fallback launch succeeded")
                 }.onFailure {
-                    Log.w(TAG, "NetEase Cloud Music not available, songId=$songId", e)
+                    Log.w(TAG, "Music app launch failed: ${e.javaClass.simpleName}")
                 }
             }
         }

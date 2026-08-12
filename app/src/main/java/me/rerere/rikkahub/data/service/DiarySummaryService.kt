@@ -35,10 +35,7 @@ import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.db.entity.MemoryBankEntity
 import me.rerere.rikkahub.data.model.ExternalMemory
 import org.koin.core.context.GlobalContext
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 /**
  * 日记总结服务
@@ -130,8 +127,7 @@ class DiarySummaryService {
                 alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
             }
 
-            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            Log.d(TAG, "Scheduled diary summary at ${sdf.format(Date(triggerTime))} (delay: ${delayMs / 60000} min)")
+            Log.d(TAG, "Diary summary scheduling completed")
         }
 
         fun cancel(context: Context) {
@@ -201,9 +197,9 @@ class DiarySummaryService {
                     val service = ExternalMemoryService(config)
                     val messages = service.queryMessagesByDate(dateStr).getOrDefault(emptyList())
                     allMessages.addAll(messages)
-                    Log.d(TAG, "getDayMessagesFromSupabase: ${config.name} returned ${messages.size} messages for $dateStr")
+                    Log.d(TAG, "External memory message fetch succeeded: count=${messages.size}")
                 }.onFailure {
-                    Log.w(TAG, "Failed to fetch messages from ${config.name} for $dateStr", it)
+                    Log.w(TAG, "External memory message fetch failed: ${it.javaClass.simpleName}")
                 }
             }
 
@@ -221,7 +217,7 @@ class DiarySummaryService {
                     dateGroup = dateStr
                 )
             }.also {
-                Log.d(TAG, "getDayMessagesFromSupabase: total ${it.size} unique messages for $dateStr")
+                Log.d(TAG, "External memory message deduplication completed: count=${it.size}")
             }
         }
 
@@ -238,7 +234,7 @@ class DiarySummaryService {
         ) {
             withContext(Dispatchers.IO) {
                 try {
-                    Log.i(TAG, "[STEP 1] generateDiaryForDate START for $dateStr")
+                    Log.i(TAG, "AI operation started: generateDiary")
                     
                     val settings = settingsStore.settingsFlowRaw.first()
                     Log.i(TAG, "[STEP 2] settings loaded")
@@ -246,14 +242,14 @@ class DiarySummaryService {
                     val model = settings.getCurrentChatModel()
                         ?: settings.findModelById(settings.chatModelId)
                         ?: run {
-                            Log.e(TAG, "[STEP FAIL] No chat model available for diary generation, chatModelId=${settings.chatModelId}")
+                            Log.e(TAG, "AI generateDiary failed: model not configured")
                             return@withContext
                         }
-                    Log.i(TAG, "[STEP 3] model found: ${model.id}")
+                    Log.i(TAG, "[STEP 3] AI model found")
 
                     val provider = model.findProvider(settings.providers)
                         ?: run {
-                            Log.e(TAG, "[STEP FAIL] No provider found for model ${model.id}")
+                            Log.e(TAG, "[STEP FAIL] No provider found")
                             return@withContext
                         }
                     Log.i(TAG, "[STEP 4] provider found: ${provider.javaClass.simpleName}")
@@ -266,7 +262,7 @@ class DiarySummaryService {
                         .filter { it.key.isNotBlank() }
                     
                     if (groupedMessages.isEmpty()) {
-                        Log.w(TAG, "No messages with valid assistantId for $dateStr")
+                        Log.w(TAG, "AI generateDiary skipped: no valid messages")
                         return@withContext
                     }
 
@@ -285,11 +281,11 @@ class DiarySummaryService {
                             }.getOrDefault(false)
                         }
                         if (hasExistingDiary) {
-                            Log.d(TAG, "Diary already exists for $dateStr assistant=$assistantId, skip generation")
+                            Log.d(TAG, "AI generateDiary skipped: result already exists")
                             return@forEach
                         }
 
-                        Log.i(TAG, "[STEP 5a] Processing diary for assistant=$assistantId, messages=${assistantMessages.size}")
+                        Log.i(TAG, "AI operation continuing: generateDiary")
 
                         // 构建对话内容
                         val conversationText = assistantMessages.joinToString("\n") { msg ->
@@ -340,7 +336,7 @@ class DiarySummaryService {
                         val summaryText = result.choices.firstOrNull()?.message?.toText()?.trim() ?: ""
 
                         if (summaryText.isBlank()) {
-                            Log.e(TAG, "Generated diary is empty for $dateStr assistant=$assistantId")
+                            Log.e(TAG, "AI generateDiary completed with empty response")
                             return@forEach
                         }
 
@@ -352,9 +348,9 @@ class DiarySummaryService {
                         )
 
                         if (savedMemory != null) {
-                            Log.i(TAG, "Diary saved to local memory bank for $dateStr assistant=$assistantId")
+                            Log.i(TAG, "Local diary summary save succeeded")
                         } else {
-                            Log.e(TAG, "saveAutoSummary returned null for $dateStr assistant=$assistantId")
+                            Log.e(TAG, "Local diary summary save failed")
                         }
 
                         // 保存到外置记忆库（日记摘要）
@@ -391,22 +387,22 @@ class DiarySummaryService {
                                         targetDate = dateStr,
                                     )
                                     if (saveResult.isSuccess) {
-                                        Log.i(TAG, "Diary saved to external memory ${config.name} for $dateStr assistant=$assistantId")
+                                        Log.i(TAG, "External diary summary save succeeded")
                                     } else {
-                                        Log.w(TAG, "Failed to save diary to external memory ${config.name} for $dateStr assistant=$assistantId", saveResult.exceptionOrNull())
+                                        Log.w(TAG, "External memory save failed: ${saveResult.exceptionOrNull()?.javaClass?.simpleName ?: "UnknownError"}")
                                     }
                                 }.onFailure {
-                                    Log.w(TAG, "Failed to save diary to external memory ${config.name} for $dateStr assistant=$assistantId", it)
+                                    Log.w(TAG, "External memory save failed: ${it.javaClass.simpleName}")
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.w(TAG, "Failed to save diary to external memory for $dateStr assistant=$assistantId", e)
+                            Log.w(TAG, "External memory save failed: ${e.javaClass.simpleName}")
                         }
                     }
 
-                    Log.i(TAG, "[STEP DONE] Diary generation completed for $dateStr, assistants=${groupedMessages.size}")
+                    Log.i(TAG, "AI operation completed: generateDiary")
                 } catch (e: Exception) {
-                    Log.e(TAG, "[STEP EXCEPTION] Failed to generate diary for $dateStr", e)
+                    Log.e(TAG, "AI generateText failed: ${e.javaClass.simpleName}")
                 }
             }
         }
@@ -427,7 +423,7 @@ class DiarySummaryService {
  */
 class DiarySummaryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        Log.d(DiarySummaryService.TAG, "DiarySummaryReceiver triggered, action=${intent.action}")
+        Log.d(DiarySummaryService.TAG, "Diary summary receiver triggered")
         when (intent.action) {
             DiarySummaryService.ACTION_DIARY_SUMMARY -> {
                 val serviceIntent = Intent(context, DiarySummaryTriggerService::class.java)
@@ -465,7 +461,7 @@ class DiarySummaryTriggerService : Service() {
             try {
                 DiarySummaryService.checkAndGenerateMissingDiaries(this@DiarySummaryTriggerService)
             } catch (e: Exception) {
-                Log.e(TAG, "Diary summary generation failed", e)
+                Log.e(TAG, "AI diary generation failed: ${e.javaClass.simpleName}")
             } finally {
                 // 调度下一次
                 DiarySummaryService.rescheduleIfEnabled(this@DiarySummaryTriggerService)
