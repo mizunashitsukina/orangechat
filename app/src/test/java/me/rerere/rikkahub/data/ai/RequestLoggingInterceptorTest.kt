@@ -103,7 +103,7 @@ class RequestLoggingInterceptorTest {
         assertEquals("POST", entry.method)
         assertEquals(responseCode, entry.responseCode)
         assertEquals(errorType, entry.error)
-        assertTrue(entry.durationMs != null && entry.durationMs >= 0)
+        assertTrue((entry.durationMs ?: -1L) >= 0L)
         assertTrue(entry.requestHeaders.isEmpty())
         assertNull(entry.requestBody)
         assertTrue(entry.responseHeaders.isEmpty())
