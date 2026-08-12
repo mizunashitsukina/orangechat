@@ -270,7 +270,10 @@ class BackupArchiveSecurityTest {
 
     @Test
     fun singleEntryLimitIsEnforced() = withTempDir { root ->
-        val archive = zip(root, mapOf("settings.json" to "0123456789"))
+        val archive = zip(root, mapOf(
+            "settings.json" to "ok",
+            "unknown.bin" to "0123456789",
+        ))
         assertPreflightFails(
             archive,
             root.resolve("staging"),
