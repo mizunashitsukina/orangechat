@@ -15,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
+import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -272,7 +273,7 @@ class BackupArchiveSecurityTest {
     )
 
     private fun withTempDir(block: (File) -> Unit) {
-        val root = createTempDir(prefix = "backup-security-")
+        val root = Files.createTempDirectory("backup-security-").toFile()
         try {
             block(root)
         } finally {
