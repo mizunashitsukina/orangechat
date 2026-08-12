@@ -11,9 +11,15 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.CancellationException
 import java.util.zip.ZipException
 import java.util.zip.ZipInputStream
-import java.util.concurrent.CancellationException
 
 /**
  * Central limits for backup archives. The defaults accept practical phone backups while bounding
@@ -84,7 +90,117 @@ data class BackupRestoreTargets(
     val pluginsArchiveDirectory: String = "Orangechat/plugins",
 )
 
+data class BackupSourceFile(
+    val file: File,
+    val relativePath: String,
+)
+
+class BackupArchiveWriteBudget(
+    private val limits: BackupArchiveLimits = BackupArchiveLimits(),
+) {
+    private var entries = 0
+    private var totalBytes = 0L
+    private var entryBytes = 0L
+    private var entryLimit = 0L
+    private var entryFailure = BackupArchiveFailure.ENTRY_TOO_LARGE
+
+    fun beginEntry(maxBytes: Long, failure: BackupArchiveFailure) {
+        if (++entries > limits.maxEntries) {
+            throw BackupArchiveException(BackupArchiveFailure.TOO_MANY_ENTRIES)
+        }
+        entryBytes = 0
+        entryLimit = maxBytes
+        entryFailure = failure
+    }
+
+    fun write(output: OutputStream, buffer: ByteArray, offset: Int, length: Int) {
+        if (length > entryLimit - entryBytes) throw BackupArchiveException(entryFailure)
+        if (length > limits.maxTotalExtractedBytes - totalBytes) {
+            throw BackupArchiveException(BackupArchiveFailure.TOTAL_TOO_LARGE)
+        }
+        output.write(buffer, offset, length)
+        entryBytes += length
+        totalBytes += length
+    }
+}
+
 object BackupArchiveSecurity {
+    fun collectSafeSourceFiles(root: File): List<BackupSourceFile> {
+        val rootPath = root.toPath()
+        if (!Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS)) return emptyList()
+        if (Files.isSymbolicLink(rootPath) || !Files.isDirectory(rootPath, LinkOption.NOFOLLOW_LINKS)) {
+            throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+        }
+        val canonicalRoot = root.canonicalFile.toPath()
+        val files = mutableListOf<BackupSourceFile>()
+        Files.walkFileTree(rootPath, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                validateSourcePath(dir, attrs, canonicalRoot)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                validateSourcePath(file, attrs, canonicalRoot)
+                if (!attrs.isRegularFile) {
+                    throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+                }
+                val relative = rootPath.relativize(file).toString().replace(File.separatorChar, '/')
+                validateEntryName(relative)
+                files += BackupSourceFile(file.toFile(), relative)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(file: Path, exc: java.io.IOException): FileVisitResult {
+                throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+            }
+        })
+        return files
+    }
+
+    fun openSafeSourceFile(root: File, file: File): InputStream {
+        val rootPath = root.toPath()
+        val filePath = file.toPath()
+        if (Files.isSymbolicLink(rootPath) || Files.isSymbolicLink(filePath) ||
+            !Files.isRegularFile(filePath, LinkOption.NOFOLLOW_LINKS)
+        ) {
+            throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+        }
+        val canonicalRoot = root.canonicalFile.toPath()
+        val canonicalFile = file.canonicalFile.toPath()
+        if (!canonicalFile.startsWith(canonicalRoot) || canonicalFile == canonicalRoot) {
+            throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+        }
+        return try {
+            Files.newInputStream(filePath, LinkOption.NOFOLLOW_LINKS)
+        } catch (e: java.io.IOException) {
+            throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+        }
+    }
+
+    suspend fun transferTemporaryFileOwnership(
+        prepare: suspend () -> File,
+        beforeTransfer: suspend () -> Unit,
+    ): File {
+        val file = prepare()
+        try {
+            beforeTransfer()
+            return file
+        } catch (e: Throwable) {
+            file.delete()
+            throw e
+        }
+    }
+
+    private fun validateSourcePath(path: Path, attrs: BasicFileAttributes, canonicalRoot: Path) {
+        if (attrs.isSymbolicLink || Files.isSymbolicLink(path)) {
+            throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+        }
+        val canonicalPath = path.toFile().canonicalFile.toPath()
+        if (!canonicalPath.startsWith(canonicalRoot)) {
+            throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
+        }
+    }
+
     fun validateEntryName(name: String): String {
         if (name.isEmpty() || name.indexOf('\u0000') >= 0) {
             throw BackupArchiveException(BackupArchiveFailure.INVALID_ENTRY_PATH)
@@ -167,13 +283,15 @@ object BackupArchiveSecurity {
                             }
                         }
                         target.outputStream().buffered().use { output ->
+                            val (entryLimit, entryFailure) = entryLimit(name, limits)
                             val written = copyLimited(
                                 input = zip,
                                 output = output,
-                                maxBytes = limits.maxEntryBytes,
-                                failure = BackupArchiveFailure.ENTRY_TOO_LARGE,
+                                maxBytes = entryLimit,
+                                failure = entryFailure,
+                                totalRemainingBytes = limits.maxTotalExtractedBytes - totalBytes,
                             )
-                            totalBytes = addTotal(totalBytes, written, limits.maxTotalExtractedBytes)
+                            totalBytes += written
                         }
                     }
                     zip.closeEntry()
@@ -296,21 +414,44 @@ object BackupArchiveSecurity {
         output: OutputStream,
         maxBytes: Long,
         failure: BackupArchiveFailure = BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+        totalRemainingBytes: Long = Long.MAX_VALUE,
     ): Long {
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
         var total = 0L
         while (true) {
             val read = input.read(buffer)
             if (read < 0) break
-            total += read
-            if (total > maxBytes) throw BackupArchiveException(failure)
+            if (read > maxBytes - total) throw BackupArchiveException(failure)
+            if (read > totalRemainingBytes - total) {
+                throw BackupArchiveException(BackupArchiveFailure.TOTAL_TOO_LARGE)
+            }
             output.write(buffer, 0, read)
+            total += read
         }
         return total
     }
 
-    private fun addTotal(current: Long, added: Long, maximum: Long): Long {
-        if (added > maximum - current) throw BackupArchiveException(BackupArchiveFailure.TOTAL_TOO_LARGE)
-        return current + added
+    fun copyArchiveEntry(
+        input: InputStream,
+        output: OutputStream,
+        budget: BackupArchiveWriteBudget,
+    ) {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            budget.write(output, buffer, 0, read)
+        }
+    }
+
+    private fun entryLimit(
+        name: String,
+        limits: BackupArchiveLimits,
+    ): Pair<Long, BackupArchiveFailure> = when (name) {
+        "settings.json" -> limits.maxSettingsJsonBytes to BackupArchiveFailure.SETTINGS_TOO_LARGE
+        "plugin_settings.json" -> {
+            limits.maxPluginSettingsJsonBytes to BackupArchiveFailure.PLUGIN_SETTINGS_TOO_LARGE
+        }
+        else -> limits.maxEntryBytes to BackupArchiveFailure.ENTRY_TOO_LARGE
     }
 }

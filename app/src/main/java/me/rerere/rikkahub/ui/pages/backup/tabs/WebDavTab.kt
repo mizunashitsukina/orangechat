@@ -245,6 +245,8 @@ fun WebDavTab(
                                 context.getString(R.string.backup_page_connection_success),
                                 type = ToastType.Success
                             )
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (_: Exception) {
                             toaster.show(
                                 context.getString(
@@ -344,14 +346,16 @@ fun WebDavTab(
                                 isRestoring = restoringItemId == item.displayName,
                                 onDelete = {
                                     scope.launch {
-                                        runCatching {
+                                        try {
                                             vm.deleteWebDavBackupFile(item)
                                             toaster.show(
                                                 context.getString(R.string.backup_page_delete_success),
                                                 type = ToastType.Success
                                             )
                                             vm.loadBackupFileItems()
-                                        }.onFailure {
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,

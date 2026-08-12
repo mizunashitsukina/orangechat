@@ -21,6 +21,7 @@ import io.ktor.utils.io.jvm.javaio.toInputStream
 import io.ktor.utils.io.readAvailable
 import io.ktor.util.cio.readChannel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.sync.BackupArchiveException
 import me.rerere.rikkahub.data.sync.BackupArchiveFailure
@@ -45,7 +46,7 @@ class S3Client(
         data: ByteArray,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val path = "/${key.trimStart('/')}"
             val signed = AwsSignatureV4.sign(
                 config = config,
@@ -78,7 +79,7 @@ class S3Client(
         file: File,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val path = "/${key.trimStart('/')}"
             val fileSha256 = file.sha256Hex()
             val signed = AwsSignatureV4.sign(
@@ -110,7 +111,7 @@ class S3Client(
     }
 
     suspend fun getObject(key: String): Result<ByteArray> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val path = "/${key.trimStart('/')}"
             val signed = AwsSignatureV4.sign(
                 config = config,
@@ -145,7 +146,7 @@ class S3Client(
     }
 
     suspend fun getObjectStream(key: String): Result<InputStream> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val path = "/${key.trimStart('/')}"
             val signed = AwsSignatureV4.sign(
                 config = config,
@@ -174,7 +175,7 @@ class S3Client(
         targetFile: File,
         maxBytes: Long = MAX_BACKUP_COMPRESSED_BYTES,
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val path = "/${key.trimStart('/')}"
             val signed = AwsSignatureV4.sign(
                 config = config,
@@ -217,7 +218,7 @@ class S3Client(
     }
 
     suspend fun deleteObject(key: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val path = "/${key.trimStart('/')}"
             val signed = AwsSignatureV4.sign(
                 config = config,
@@ -243,7 +244,7 @@ class S3Client(
     }
 
     suspend fun headObject(key: String): Result<S3ObjectMetadata> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val path = "/${key.trimStart('/')}"
             val signed = AwsSignatureV4.sign(
                 config = config,
@@ -278,7 +279,7 @@ class S3Client(
         maxKeys: Int = 1000,
         continuationToken: String? = null,
     ): Result<S3ListResult> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val queryParams = mutableMapOf(
                 "list-type" to "2",
                 "max-keys" to maxKeys.toString(),
@@ -483,3 +484,11 @@ data class S3ListResult(
 )
 
 class S3Exception(message: String) : Exception(message)
+
+private inline fun <T> runSuspendCatching(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Throwable) {
+    Result.failure(e)
+}

@@ -24,6 +24,7 @@ import io.ktor.utils.io.jvm.javaio.toInputStream
 import io.ktor.utils.io.readAvailable
 import io.ktor.util.cio.readChannel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.WebDavConfig
 import me.rerere.rikkahub.data.sync.BackupArchiveException
@@ -62,7 +63,7 @@ class WebDavClient(
         data: ByteArray,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV PUT started")
 
@@ -91,7 +92,7 @@ class WebDavClient(
         file: File,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV file upload started")
 
@@ -117,7 +118,7 @@ class WebDavClient(
     }
 
     suspend fun get(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV GET started")
 
@@ -146,7 +147,7 @@ class WebDavClient(
     }
 
     suspend fun getStream(path: String): Result<InputStream> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV stream GET started")
 
@@ -169,7 +170,7 @@ class WebDavClient(
         targetFile: File,
         maxBytes: Long = MAX_BACKUP_COMPRESSED_BYTES,
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV download started")
 
@@ -204,7 +205,7 @@ class WebDavClient(
     }
 
     suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV DELETE started")
 
@@ -224,7 +225,7 @@ class WebDavClient(
     }
 
     suspend fun head(path: String): Result<WebDavResourceInfo> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV HEAD started")
 
@@ -249,7 +250,7 @@ class WebDavClient(
     }
 
     suspend fun mkcol(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV MKCOL started")
 
@@ -273,7 +274,7 @@ class WebDavClient(
         path: String = "",
         depth: Int = 1,
     ): Result<List<WebDavResourceInfo>> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
             Log.d(TAG, "WebDAV PROPFIND started: depth=$depth")
 
@@ -323,14 +324,14 @@ class WebDavClient(
     }
 
     suspend fun ensureCollectionExists(path: String = ""): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             Log.d(TAG, "WebDAV collection check started")
 
             // Try propfind first to check if it exists
             val propfindResult = propfind(path, depth = 0)
             if (propfindResult.isSuccess) {
                 Log.d(TAG, "WebDAV collection exists")
-                return@runCatching
+                return@runSuspendCatching
             }
 
             // Create collection if not exists
@@ -339,7 +340,7 @@ class WebDavClient(
     }
 
     suspend fun list(path: String = ""): Result<List<WebDavResourceInfo>> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val result = propfind(path, depth = 1).getOrThrow()
             // Filter out the parent directory itself (first entry)
             if (result.isNotEmpty()) {
@@ -460,3 +461,11 @@ class WebDavException(
     message: String,
     val statusCode: Int,
 ) : Exception(message)
+
+private inline fun <T> runSuspendCatching(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Throwable) {
+    Result.failure(e)
+}

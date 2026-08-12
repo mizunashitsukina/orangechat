@@ -45,7 +45,7 @@ class BackupArchiveService(
         // Preserve the established backup_*.zip naming contract used by remote listing filters.
         val backupFile = createCacheFile("backup_", ".zip")
         try {
-            val budget = ArchiveWriteBudget()
+            val budget = BackupArchiveWriteBudget()
             ZipOutputStream(
                 BoundedOutputStream(FileOutputStream(backupFile), MAX_BACKUP_COMPRESSED_BYTES)
             ).use { zip ->
@@ -143,40 +143,42 @@ class BackupArchiveService(
     private fun createStagingDirectory(): File =
         File(context.cacheDir, "backup-staging-${UUID.randomUUID()}")
 
-    private fun addDatabase(zip: ZipOutputStream, budget: ArchiveWriteBudget) {
+    private fun addDatabase(zip: ZipOutputStream, budget: BackupArchiveWriteBudget) {
         val database = context.getDatabasePath("rikka_hub")
         addFileIfPresent(zip, database, "rikka_hub.db", budget)
         addFileIfPresent(zip, File(database.parentFile, "rikka_hub-wal"), "rikka_hub-wal", budget)
         addFileIfPresent(zip, File(database.parentFile, "rikka_hub-shm"), "rikka_hub-shm", budget)
     }
 
-    private fun addDirectory(zip: ZipOutputStream, root: File, prefix: String, budget: ArchiveWriteBudget) {
-        if (!root.isDirectory) return
-        root.walkTopDown().filter { it.isFile }.forEach { file ->
-            addFile(zip, file, prefix + file.relativeTo(root).invariantSeparatorsPath, budget)
+    private fun addDirectory(zip: ZipOutputStream, root: File, prefix: String, budget: BackupArchiveWriteBudget) {
+        BackupArchiveSecurity.collectSafeSourceFiles(root).forEach { source ->
+            addFile(zip, source.file, prefix + source.relativePath, budget, root)
         }
     }
 
-    private fun addFileIfPresent(zip: ZipOutputStream, file: File, name: String, budget: ArchiveWriteBudget) {
+    private fun addFileIfPresent(zip: ZipOutputStream, file: File, name: String, budget: BackupArchiveWriteBudget) {
         if (file.isFile) addFile(zip, file, name, budget)
     }
 
-    private fun addFile(zip: ZipOutputStream, file: File, name: String, budget: ArchiveWriteBudget) {
+    private fun addFile(
+        zip: ZipOutputStream,
+        file: File,
+        name: String,
+        budget: BackupArchiveWriteBudget,
+        sourceRoot: File? = null,
+    ) {
         BackupArchiveSecurity.validateEntryName(name)
-        budget.addEntry(file.length())
+        budget.beginEntry(MAX_BACKUP_ENTRY_BYTES, BackupArchiveFailure.ENTRY_TOO_LARGE)
         zip.putNextEntry(ZipEntry(name))
-        FileInputStream(file).use { input ->
-            BackupArchiveSecurity.copyLimited(
-                input,
-                zip,
-                MAX_BACKUP_ENTRY_BYTES,
-                BackupArchiveFailure.ENTRY_TOO_LARGE,
-            )
+        val input = sourceRoot?.let { BackupArchiveSecurity.openSafeSourceFile(it, file) }
+            ?: FileInputStream(file)
+        input.use {
+            BackupArchiveSecurity.copyArchiveEntry(it, zip, budget)
         }
         zip.closeEntry()
     }
 
-    private fun addText(zip: ZipOutputStream, name: String, content: String, budget: ArchiveWriteBudget) {
+    private fun addText(zip: ZipOutputStream, name: String, content: String, budget: BackupArchiveWriteBudget) {
         BackupArchiveSecurity.validateEntryName(name)
         val bytes = content.toByteArray(Charsets.UTF_8)
         val maximum = if (name == "plugin_settings.json") {
@@ -184,15 +186,14 @@ class BackupArchiveService(
         } else {
             MAX_SETTINGS_JSON_BYTES
         }
-        if (bytes.size > maximum) {
-            throw BackupArchiveException(
-                if (name == "plugin_settings.json") BackupArchiveFailure.PLUGIN_SETTINGS_TOO_LARGE
-                else BackupArchiveFailure.SETTINGS_TOO_LARGE
-            )
+        val failure = if (name == "plugin_settings.json") {
+            BackupArchiveFailure.PLUGIN_SETTINGS_TOO_LARGE
+        } else {
+            BackupArchiveFailure.SETTINGS_TOO_LARGE
         }
-        budget.addEntry(bytes.size.toLong())
+        budget.beginEntry(maximum, failure)
         zip.putNextEntry(ZipEntry(name))
-        zip.write(bytes)
+        bytes.inputStream().use { input -> BackupArchiveSecurity.copyArchiveEntry(input, zip, budget) }
         zip.closeEntry()
     }
 
@@ -265,24 +266,6 @@ class BackupArchiveService(
                     BackupArchiveFailure.ENTRY_TOO_LARGE,
                 )
             }
-        }
-    }
-
-    private class ArchiveWriteBudget {
-        private var entries = 0
-        private var totalBytes = 0L
-
-        fun addEntry(bytes: Long) {
-            if (++entries > MAX_BACKUP_ENTRY_COUNT) {
-                throw BackupArchiveException(BackupArchiveFailure.TOO_MANY_ENTRIES)
-            }
-            if (bytes > MAX_BACKUP_ENTRY_BYTES) {
-                throw BackupArchiveException(BackupArchiveFailure.ENTRY_TOO_LARGE)
-            }
-            if (bytes > MAX_BACKUP_TOTAL_EXTRACTED_BYTES - totalBytes) {
-                throw BackupArchiveException(BackupArchiveFailure.TOTAL_TOO_LARGE)
-            }
-            totalBytes += bytes
         }
     }
 

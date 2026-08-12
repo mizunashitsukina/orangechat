@@ -7,6 +7,7 @@
 package me.rerere.rikkahub.data.sync
 
 import me.rerere.rikkahub.data.files.SkillPaths
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -16,6 +17,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeNoException
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -80,6 +83,49 @@ class BackupArchiveSecurityTest {
         assertNotNull(SkillPaths.resolveSkillFile(skill!!, "references/info.md"))
         assertNull(SkillPaths.resolveSkillDir(skillsRoot, "../outside"))
         assertNull(SkillPaths.resolveSkillFile(skill, "../../outside"))
+    }
+
+    @Test
+    fun ordinarySourceDirectoryIsCollectedWithoutChangingRelativePaths() = withTempDir { root ->
+        val source = root.resolve("source").apply { mkdirs() }
+        source.resolve("nested").mkdirs()
+        source.resolve("nested/file.txt").writeText("content")
+
+        val files = BackupArchiveSecurity.collectSafeSourceFiles(source)
+
+        assertEquals(listOf("nested/file.txt"), files.map { it.relativePath })
+    }
+
+    @Test
+    fun sourceFileSymlinkOutsideRootIsRejectedWithoutSensitiveDiagnostics() = withTempDir { root ->
+        val marker = "secret-source-marker"
+        val source = root.resolve("source").apply { mkdirs() }
+        val outside = root.resolve(marker).apply { writeText("private") }
+        createSymlinkOrSkip(source.resolve("linked-file").toPath(), outside.toPath())
+
+        val failure = sourceTraversalFailure(source)
+
+        assertFalse(failure.message.orEmpty().contains(marker))
+        assertFalse(failure.toString().contains(root.absolutePath))
+    }
+
+    @Test
+    fun sourceDirectorySymlinkOutsideRootIsRejected() = withTempDir { root ->
+        val source = root.resolve("source").apply { mkdirs() }
+        val outside = root.resolve("outside").apply { mkdirs() }
+        outside.resolve("private.txt").writeText("private")
+        createSymlinkOrSkip(source.resolve("linked-directory").toPath(), outside.toPath())
+
+        sourceTraversalFailure(source)
+    }
+
+    @Test
+    fun sourceSymlinkLoopIsRejectedWithoutTraversal() = withTempDir { root ->
+        val source = root.resolve("source").apply { mkdirs() }
+        val nested = source.resolve("nested").apply { mkdirs() }
+        createSymlinkOrSkip(nested.resolve("loop").toPath(), source.toPath())
+
+        sourceTraversalFailure(source)
     }
 
     @Test
@@ -267,6 +313,88 @@ class BackupArchiveSecurityTest {
     }
 
     @Test
+    fun settingsLimitIsEnforcedDuringExtractionBeforeGenericEntryLimit() = withTempDir { root ->
+        val archive = zip(root, mapOf("settings.json" to "0123456789"))
+        assertPreflightFails(
+            archive,
+            root.resolve("staging"),
+            BackupArchiveFailure.SETTINGS_TOO_LARGE,
+            limits(maxEntryBytes = 100, maxSettingsJsonBytes = 4),
+        )
+    }
+
+    @Test
+    fun pluginSettingsLimitIsEnforcedDuringExtractionBeforeGenericEntryLimit() = withTempDir { root ->
+        val archive = zip(root, mapOf(
+            "settings.json" to "ok",
+            "plugin_settings.json" to "0123456789",
+        ))
+        assertPreflightFails(
+            archive,
+            root.resolve("staging"),
+            BackupArchiveFailure.PLUGIN_SETTINGS_TOO_LARGE,
+            limits(maxEntryBytes = 100, maxPluginSettingsJsonBytes = 4),
+        )
+    }
+
+    @Test
+    fun totalLimitRejectsSecondEntryBeforeWritingPastRemainingBudget() {
+        val output = ByteArrayOutputStream()
+        val firstWritten = BackupArchiveSecurity.copyLimited(
+            ByteArrayInputStream("first!".toByteArray()),
+            output,
+            maxBytes = 100,
+            failure = BackupArchiveFailure.ENTRY_TOO_LARGE,
+            totalRemainingBytes = 10,
+        )
+        assertFails(BackupArchiveFailure.TOTAL_TOO_LARGE) {
+            BackupArchiveSecurity.copyLimited(
+                ByteArrayInputStream("second-entry".toByteArray()),
+                output,
+                maxBytes = 100,
+                failure = BackupArchiveFailure.ENTRY_TOO_LARGE,
+                totalRemainingBytes = 10 - firstWritten,
+            )
+        }
+        assertEquals(firstWritten.toInt(), output.size())
+    }
+
+    @Test
+    fun archiveCreationBudgetUsesActualStreamBytesWhenSourceGrows() = withTempDir { root ->
+        val source = root.resolve("growing.bin").apply { writeText("1234") }
+        val initiallyObservedLength = source.length()
+        val output = ByteArrayOutputStream()
+        val budget = BackupArchiveWriteBudget(limits(maxEntryBytes = 6, maxTotalExtractedBytes = 100))
+        budget.beginEntry(6, BackupArchiveFailure.ENTRY_TOO_LARGE)
+        val delegate = source.inputStream()
+        val growingInput = object : java.io.InputStream() {
+            private var grew = false
+
+            override fun read(): Int = delegate.read()
+
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                val read = delegate.read(buffer, offset, minOf(length, 4))
+                if (!grew && read > 0) {
+                    source.appendText("56789")
+                    grew = true
+                }
+                return read
+            }
+
+            override fun close() = delegate.close()
+        }
+
+        assertFails(BackupArchiveFailure.ENTRY_TOO_LARGE) {
+            growingInput.use { input ->
+                BackupArchiveSecurity.copyArchiveEntry(input, output, budget)
+            }
+        }
+        assertEquals(4L, initiallyObservedLength)
+        assertEquals(9L, source.length())
+        assertEquals(4, output.size())
+    }
+
+    @Test
     fun compressedArchiveLimitIsEnforced() = withTempDir { root ->
         val archive = zip(root, mapOf("settings.json" to "settings"))
         assertPreflightFails(
@@ -386,6 +514,65 @@ class BackupArchiveSecurityTest {
         assertFalse(staging.exists())
     }
 
+    @Test
+    fun temporaryFileOwnershipDeletesFileWhenPostCreateWorkFails() = withTempDir { root ->
+        val file = root.resolve("export.zip")
+        val failure = IllegalStateException("safe failure")
+
+        val thrown = try {
+            runBlocking {
+                BackupArchiveSecurity.transferTemporaryFileOwnership(
+                    prepare = { file.apply { writeText("archive") } },
+                    beforeTransfer = { throw failure },
+                )
+            }
+            fail("Expected export ownership failure")
+            null
+        } catch (e: IllegalStateException) {
+            e
+        }
+
+        assertSame(failure, thrown)
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun temporaryFileOwnershipPreservesCancellationAndDeletesFile() = withTempDir { root ->
+        val file = root.resolve("export.zip")
+        val cancellation = CancellationException("secret-cancellation-marker")
+
+        val thrown = try {
+            runBlocking {
+                BackupArchiveSecurity.transferTemporaryFileOwnership(
+                    prepare = { file.apply { writeText("archive") } },
+                    beforeTransfer = { throw cancellation },
+                )
+            }
+            fail("Expected cancellation")
+            null
+        } catch (e: CancellationException) {
+            e
+        }
+
+        assertSame(cancellation, thrown)
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun temporaryFileOwnershipTransfersSuccessfulFileToCaller() = withTempDir { root ->
+        val file = root.resolve("export.zip")
+
+        val result = runBlocking {
+            BackupArchiveSecurity.transferTemporaryFileOwnership(
+                prepare = { file.apply { writeText("archive") } },
+                beforeTransfer = {},
+            )
+        }
+
+        assertEquals(file, result)
+        assertTrue(file.isFile)
+    }
+
     private fun assertUnsafe(name: String) {
         assertFails(BackupArchiveFailure.INVALID_ENTRY_PATH) {
             BackupArchiveSecurity.validateEntryName(name)
@@ -426,6 +613,30 @@ class BackupArchiveSecurityTest {
         )
     }
 
+    private fun sourceTraversalFailure(source: File): BackupArchiveException {
+        val failure = try {
+            BackupArchiveSecurity.collectSafeSourceFiles(source)
+            fail("Expected unsafe source rejection")
+            null
+        } catch (e: BackupArchiveException) {
+            assertEquals(BackupArchiveFailure.INVALID_ENTRY_PATH, e.reason)
+            e
+        }
+        return failure!!
+    }
+
+    private fun createSymlinkOrSkip(link: java.nio.file.Path, target: java.nio.file.Path) {
+        try {
+            Files.createSymbolicLink(link, target)
+        } catch (e: UnsupportedOperationException) {
+            assumeNoException(e)
+        } catch (e: IOException) {
+            assumeNoException(e)
+        } catch (e: SecurityException) {
+            assumeNoException(e)
+        }
+    }
+
     private fun assertFails(reason: BackupArchiveFailure, block: () -> Unit) {
         try {
             block()
@@ -461,13 +672,14 @@ class BackupArchiveSecurityTest {
         maxEntryBytes: Long = 1024,
         maxTotalExtractedBytes: Long = 4096,
         maxSettingsJsonBytes: Long = 1024,
+        maxPluginSettingsJsonBytes: Long = 1024,
     ) = BackupArchiveLimits(
         maxCompressedBytes = 4096,
         maxEntries = maxEntries,
         maxEntryBytes = maxEntryBytes,
         maxTotalExtractedBytes = maxTotalExtractedBytes,
         maxSettingsJsonBytes = maxSettingsJsonBytes,
-        maxPluginSettingsJsonBytes = 1024,
+        maxPluginSettingsJsonBytes = maxPluginSettingsJsonBytes,
     )
 
     private fun withTempDir(block: (File) -> Unit) {

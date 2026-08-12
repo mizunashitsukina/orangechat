@@ -273,6 +273,8 @@ fun S3Tab(
                                 context.getString(R.string.backup_page_connection_success),
                                 type = ToastType.Success
                             )
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (_: Exception) {
                             toaster.show(
                                 context.getString(
@@ -373,14 +375,16 @@ fun S3Tab(
                                 isRestoring = restoringItemId == item.displayName,
                                 onDelete = {
                                     scope.launch {
-                                        runCatching {
+                                        try {
                                             vm.deleteS3BackupFile(item)
                                             toaster.show(
                                                 context.getString(R.string.backup_page_delete_success),
                                                 type = ToastType.Success
                                             )
                                             vm.loadS3BackupFileItems()
-                                        }.onFailure {
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,
