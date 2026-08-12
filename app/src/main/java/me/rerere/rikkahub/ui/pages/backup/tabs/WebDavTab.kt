@@ -244,12 +244,11 @@ fun WebDavTab(
                                 context.getString(R.string.backup_page_connection_success),
                                 type = ToastType.Success
                             )
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                        } catch (_: Exception) {
                             toaster.show(
                                 context.getString(
                                     R.string.backup_page_connection_failed,
-                                    e.message ?: ""
+                                    ""
                                 ),
                                 type = ToastType.Error
                             )
@@ -279,9 +278,8 @@ fun WebDavTab(
                                 type = ToastType.Success
                             )
                         }.onFailure {
-                            it.printStackTrace()
                             toaster.show(
-                                it.message ?: context.getString(R.string.backup_page_unknown_error),
+                                context.getString(R.string.backup_page_unknown_error),
                                 type = ToastType.Error
                             )
                         }
@@ -349,12 +347,11 @@ fun WebDavTab(
                                                 type = ToastType.Success
                                             )
                                             vm.loadBackupFileItems()
-                                        }.onFailure { err ->
-                                            err.printStackTrace()
+                                        }.onFailure {
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,
-                                                    err.message ?: ""
+                                                    ""
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -372,12 +369,11 @@ fun WebDavTab(
                                             )
                                             showBackupFiles = false
                                             onShowRestartDialog()
-                                        }.onFailure { err ->
-                                            err.printStackTrace()
+                                        }.onFailure {
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_restore_failed,
-                                                    err.message ?: ""
+                                                    ""
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -394,7 +390,7 @@ fun WebDavTab(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = stringResource(R.string.backup_page_loading_failed, it.message ?: ""),
+                            text = stringResource(R.string.backup_page_loading_failed, ""),
                             color = MaterialTheme.colorScheme.error
                         )
                     }

@@ -20,13 +20,26 @@ import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.rikkahub.utils.JsonInstant
 import java.io.File
 import java.util.zip.ZipFile
+import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
+import me.rerere.rikkahub.data.sync.BackupArchiveFailure
+import me.rerere.rikkahub.data.sync.MAX_THIRD_PARTY_IMPORT_BYTES
+import java.io.ByteArrayOutputStream
 
 object CherryStudioProviderImporter {
     fun importProviders(file: File): List<ProviderSetting> {
         val dataJson = ZipFile(file).use { zip ->
             val entry = zip.getEntry("data.json")
                 ?: throw IllegalArgumentException("Invalid Cherry Studio backup: data.json not found")
-            zip.getInputStream(entry).bufferedReader().use { it.readText() }
+            zip.getInputStream(entry).use { input ->
+                val output = ByteArrayOutputStream()
+                BackupArchiveSecurity.copyLimited(
+                    input,
+                    output,
+                    MAX_THIRD_PARTY_IMPORT_BYTES,
+                    BackupArchiveFailure.ENTRY_TOO_LARGE,
+                )
+                output.toString(Charsets.UTF_8.name())
+            }
         }
 
         val root = JsonInstant.parseToJsonElement(dataJson).jsonObject

@@ -29,6 +29,8 @@ import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.JsonInstantPretty
 import java.io.File
+import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
+import me.rerere.rikkahub.data.sync.MAX_THIRD_PARTY_IMPORT_BYTES
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.UUID
@@ -64,7 +66,9 @@ import kotlin.uuid.Uuid
  */
 object ChatboxImporter {
     fun import(file: File, assistantId: Uuid, providers: List<ProviderSetting>): ChatboxImportPayload {
-        val root = JsonInstant.parseToJsonElement(file.readText()).jsonObject
+        val root = JsonInstant.parseToJsonElement(
+            BackupArchiveSecurity.readLimitedText(file, MAX_THIRD_PARTY_IMPORT_BYTES)
+        ).jsonObject
         val importedProviders = importProviders(root)
         return ChatboxImportPayload(
             providers = importedProviders,
@@ -73,7 +77,9 @@ object ChatboxImporter {
     }
 
     fun importProviders(file: File): List<ProviderSetting> {
-        val root = JsonInstant.parseToJsonElement(file.readText()).jsonObject
+        val root = JsonInstant.parseToJsonElement(
+            BackupArchiveSecurity.readLimitedText(file, MAX_THIRD_PARTY_IMPORT_BYTES)
+        ).jsonObject
         return importProviders(root)
     }
 

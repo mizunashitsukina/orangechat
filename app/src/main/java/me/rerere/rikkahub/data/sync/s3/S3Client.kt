@@ -15,7 +15,6 @@ import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.jvm.javaio.toInputStream
@@ -23,6 +22,11 @@ import io.ktor.utils.io.readAvailable
 import io.ktor.util.cio.readChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import me.rerere.rikkahub.data.sync.BackupArchiveException
+import me.rerere.rikkahub.data.sync.BackupArchiveFailure
+import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
+import me.rerere.rikkahub.data.sync.MAX_BACKUP_COMPRESSED_BYTES
+import me.rerere.rikkahub.data.sync.MAX_REMOTE_METADATA_BYTES
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.InputStream
@@ -60,12 +64,11 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "putObject failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to put object: ${response.status}", errorBody)
+                Log.e(TAG, "S3 PUT failed: status=${response.status.value}")
+                throw S3Exception("S3 request failed: ${response.status.value}")
             }
 
-            Log.d(TAG, "putObject success: $key")
+            Log.d(TAG, "S3 PUT succeeded")
             Unit
         }
     }
@@ -97,12 +100,11 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "putObject(file) failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to put object: ${response.status}", errorBody)
+                Log.e(TAG, "S3 file upload failed: status=${response.status.value}")
+                throw S3Exception("S3 request failed: ${response.status.value}")
             }
 
-            Log.d(TAG, "putObject(file) success: $key (${file.length()} bytes)")
+            Log.d(TAG, "S3 file upload succeeded: bytes=${file.length()}")
             Unit
         }
     }
@@ -124,13 +126,21 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "getObject failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to get object: ${response.status}", errorBody)
+                Log.e(TAG, "S3 GET failed: status=${response.status.value}")
+                throw S3Exception("S3 request failed: ${response.status.value}")
             }
 
             val channel = response.bodyAsChannel()
-            channel.toInputStream().readBytes()
+            channel.toInputStream().use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                BackupArchiveSecurity.copyLimited(
+                    input,
+                    output,
+                    MAX_BACKUP_COMPRESSED_BYTES,
+                    BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+                )
+                output.toByteArray()
+            }
         }
     }
 
@@ -151,16 +161,19 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "getObjectStream failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to get object stream: ${response.status}", errorBody)
+                Log.e(TAG, "S3 stream GET failed: status=${response.status.value}")
+                throw S3Exception("S3 request failed: ${response.status.value}")
             }
 
             response.bodyAsChannel().toInputStream()
         }
     }
 
-    suspend fun downloadObjectToFile(key: String, targetFile: File): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun downloadObjectToFile(
+        key: String,
+        targetFile: File,
+        maxBytes: Long = MAX_BACKUP_COMPRESSED_BYTES,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val path = "/${key.trimStart('/')}"
             val signed = AwsSignatureV4.sign(
@@ -169,7 +182,7 @@ class S3Client(
                 path = path,
             )
 
-            Log.d(TAG, "GET (download to file): $key")
+            Log.d(TAG, "S3 download started")
 
             httpClient.prepareRequest(signed.url) {
                 method = HttpMethod.Get
@@ -178,22 +191,26 @@ class S3Client(
                 }
             }.execute { response ->
                 if (!response.status.isSuccess()) {
-                    val errorBody = response.bodyAsText()
-                    Log.e(TAG, "downloadObjectToFile failed: ${response.status} - $errorBody")
-                    throw S3Exception("Failed to download object: ${response.status}", errorBody)
+                    Log.e(TAG, "S3 download failed: status=${response.status.value}")
+                    throw S3Exception("S3 request failed: ${response.status.value}")
                 }
 
                 val channel = response.bodyAsChannel()
                 targetFile.outputStream().use { outputStream ->
                     val buffer = ByteArray(8192)
+                    var downloaded = 0L
                     while (!channel.isClosedForRead) {
                         val bytesRead = channel.readAvailable(buffer)
                         if (bytesRead > 0) {
+                            if (bytesRead > maxBytes - downloaded) {
+                                throw BackupArchiveException(BackupArchiveFailure.ARCHIVE_TOO_LARGE)
+                            }
                             outputStream.write(buffer, 0, bytesRead)
+                            downloaded += bytesRead
                         }
                     }
                 }
-                Log.d(TAG, "downloadObjectToFile success: downloaded ${targetFile.length()} bytes")
+                Log.d(TAG, "S3 download succeeded: bytes=${targetFile.length()}")
             }
             Unit
         }
@@ -216,12 +233,11 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "deleteObject failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to delete object: ${response.status}", errorBody)
+                Log.e(TAG, "S3 DELETE failed: status=${response.status.value}")
+                throw S3Exception("S3 request failed: ${response.status.value}")
             }
 
-            Log.d(TAG, "deleteObject success: $key")
+            Log.d(TAG, "S3 DELETE succeeded")
             Unit
         }
     }
@@ -243,7 +259,7 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                throw S3Exception("Object not found: ${response.status}", "")
+                throw S3Exception("S3 request failed: ${response.status.value}")
             }
 
             S3ObjectMetadata(
@@ -286,12 +302,20 @@ class S3Client(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "listObjects failed: ${response.status} - $errorBody")
-                throw S3Exception("Failed to list objects: ${response.status}", errorBody)
+                Log.e(TAG, "S3 LIST failed: status=${response.status.value}")
+                throw S3Exception("S3 request failed: ${response.status.value}")
             }
 
-            val xmlBody = response.bodyAsText()
+            val xmlBody = response.bodyAsChannel().toInputStream().use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                BackupArchiveSecurity.copyLimited(
+                    input,
+                    output,
+                    MAX_REMOTE_METADATA_BYTES,
+                    BackupArchiveFailure.ENTRY_TOO_LARGE,
+                )
+                output.toString(Charsets.UTF_8.name())
+            }
             parseListObjectsResponse(xmlBody)
         }
     }
@@ -458,7 +482,4 @@ data class S3ListResult(
     val keyCount: Int,
 )
 
-class S3Exception(
-    message: String,
-    val responseBody: String,
-) : Exception(message)
+class S3Exception(message: String) : Exception(message)
