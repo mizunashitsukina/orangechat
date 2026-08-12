@@ -10,12 +10,10 @@ import android.content.Context
 import android.util.Log
 import io.ktor.server.cio.CIOApplicationEngine
 import io.ktor.server.engine.EmbeddedServer
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -23,6 +21,7 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.web.startWebServer
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 
 private const val TAG = "WebServerManager"
@@ -34,10 +33,11 @@ data class WebServerState(
     val isLoading: Boolean = false,
     val port: Int = 8080,
     val serviceName: String = DEFAULT_SERVICE_NAME,
-    val localhostOnly: Boolean = false,
+    val localhostOnly: Boolean = true,
     val hostname: String? = null,
     val address: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val securityIssue: WebServerSecurityIssue? = null,
 )
 
 class WebServerManager(
@@ -57,36 +57,61 @@ class WebServerManager(
     fun start(
         port: Int = 8080,
         serviceName: String = DEFAULT_SERVICE_NAME,
-        localhostOnly: Boolean = false
     ) {
         if (server != null) {
             Log.w(TAG, "Server already running")
             return
         }
 
+        _state.value = _state.value.copy(isLoading = true, error = null, securityIssue = null)
         appScope.launch {
-            // 仅本机模式绑定回环地址
-            val host = if (localhostOnly) HOST_LOOPBACK else HOST_ALL_INTERFACES
+            val settings = settingsStore.settingsFlowRaw.first()
+            val securityDecision = evaluateWebServerSecurity(
+                // The persisted choice is the sole authority for listener scope. Direct service
+                // intents and future call sites cannot widen the network boundary.
+                requestedLocalhostOnly = settings.webServerLocalhostOnly,
+                jwtEnabled = settings.webServerJwtEnabled,
+                accessPassword = settings.webServerAccessPassword,
+            )
+            val effectiveLocalhostOnly = securityDecision.effectiveLocalhostOnly
+            val host = if (effectiveLocalhostOnly) HOST_LOOPBACK else HOST_ALL_INTERFACES
             val baseState = WebServerState(
                 port = port,
                 serviceName = serviceName,
-                localhostOnly = localhostOnly
+                localhostOnly = effectiveLocalhostOnly,
+                securityIssue = securityDecision.issue,
             )
+            if (!securityDecision.canStart) {
+                Log.w(TAG, "Web server start rejected by security policy")
+                _state.value = baseState.copy(error = "Web server authentication configuration is incomplete")
+                return@launch
+            }
+            if (securityDecision.issue == WebServerSecurityIssue.LAN_AUTH_REQUIRED) {
+                Log.w(TAG, "Unsafe LAN configuration restricted to localhost")
+                settingsStore.update(settings.copy(webServerLocalhostOnly = true))
+            }
             try {
-                _state.value = _state.value.copy(isLoading = true)
-                Log.i(TAG, "Starting web server on $host:$port")
-                if (!isPortAvailable(port)) {
-                    Log.w(TAG, "Port $port is already in use")
-                    _state.value = baseState.copy(error = "Port $port is already in use")
+                _state.value = baseState.copy(isLoading = true)
+                Log.i(TAG, "Web server start requested")
+                if (!isPortAvailable(host, port)) {
+                    Log.w(TAG, "Configured web server port is unavailable")
+                    _state.value = baseState.copy(error = "Configured port is unavailable")
                     return@launch
                 }
                 server = startWebServer(port = port, host = host) {
-                    configureWebApi(context, chatService, conversationRepo, settingsStore, filesManager)
+                    configureWebApi(
+                        context = context,
+                        chatService = chatService,
+                        conversationRepo = conversationRepo,
+                        settingsStore = settingsStore,
+                        filesManager = filesManager,
+                        jwtEnabled = settings.webServerJwtEnabled,
+                    )
                 }.start(wait = false)
 
                 _state.value = baseState.copy(isRunning = true)
                 // 仅局域网模式注册 mDNS
-                if (!localhostOnly) {
+                if (!effectiveLocalhostOnly) {
                     runCatching {
                         nsdRegistrar.register(
                             port = port,
@@ -100,13 +125,13 @@ class WebServerManager(
                             }
                         )
                     }.onFailure {
-                        Log.w(TAG, "NSD register failed", it)
+                        Log.w(TAG, "NSD registration failed: ${it.javaClass.simpleName}")
                     }
                 }
-                Log.i(TAG, "Web server started successfully on $host:$port")
+                Log.i(TAG, "Web server started successfully")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start web server", e)
-                _state.value = baseState.copy(error = e.message)
+                Log.e(TAG, "Web server start failed: ${e.javaClass.simpleName}")
+                _state.value = baseState.copy(error = "Web server failed to start")
             }
         }
     }
@@ -122,13 +147,13 @@ class WebServerManager(
                 runCatching {
                     nsdRegistrar.unregister()
                 }.onFailure {
-                    Log.w(TAG, "NSD unregister failed", it)
+                    Log.w(TAG, "NSD unregister failed: ${it.javaClass.simpleName}")
                 }
                 _state.value = _state.value.copy(isLoading = false)
                 Log.i(TAG, "Web server stopped")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to stop web server", e)
-                _state.value = _state.value.copy(isLoading = false, error = e.message)
+                Log.e(TAG, "Web server stop failed: ${e.javaClass.simpleName}")
+                _state.value = _state.value.copy(isLoading = false, error = "Web server failed to stop")
             }
         }
     }
@@ -136,15 +161,18 @@ class WebServerManager(
     fun restart(
         port: Int = _state.value.port,
         serviceName: String = _state.value.serviceName,
-        localhostOnly: Boolean = _state.value.localhostOnly
     ) {
         stop()
-        start(port, serviceName, localhostOnly)
+        start(port, serviceName)
     }
 
-    private fun isPortAvailable(port: Int): Boolean {
+    private fun isPortAvailable(host: String, port: Int): Boolean {
         return try {
-            ServerSocket(port).use { true }
+            ServerSocket().use { socket ->
+                socket.reuseAddress = true
+                socket.bind(InetSocketAddress(host, port))
+                true
+            }
         } catch (e: Exception) {
             false
         }

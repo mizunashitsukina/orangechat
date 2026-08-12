@@ -57,7 +57,7 @@ class NsdServiceRegistrar(
                 return@withContext
             }
 
-            Log.i(TAG, "Creating JmDNS with hostname=$serviceName, address=$address")
+            Log.i(TAG, "Creating mDNS registration")
 
             // Create JmDNS instance with custom hostname
             // This will register hostname.local -> IP address
@@ -73,10 +73,7 @@ class NsdServiceRegistrar(
             )
             mdns.registerService(serviceInfo)
 
-            Log.i(
-                TAG,
-                "Service registered: $serviceName.$serviceType port=$port, hostname=$serviceName.local"
-            )
+            Log.i(TAG, "mDNS service registered")
 
             onRegistered?.invoke(
                 RegisteredServiceInfo(
@@ -87,7 +84,7 @@ class NsdServiceRegistrar(
                 )
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register service", e)
+            Log.e(TAG, "mDNS service registration failed: ${e.javaClass.simpleName}")
             cleanup()
         }
     }
@@ -101,7 +98,7 @@ class NsdServiceRegistrar(
             jmdns?.unregisterAllServices()
             jmdns?.close()
         }.onFailure {
-            Log.w(TAG, "Failed to close JmDNS", it)
+            Log.w(TAG, "mDNS cleanup failed: ${it.javaClass.simpleName}")
         }
         jmdns = null
 
@@ -110,7 +107,7 @@ class NsdServiceRegistrar(
                 multicastLock?.release()
             }
         }.onFailure {
-            Log.w(TAG, "Failed to release multicast lock", it)
+            Log.w(TAG, "Multicast lock release failed: ${it.javaClass.simpleName}")
         }
         multicastLock = null
 
@@ -134,7 +131,7 @@ class NsdServiceRegistrar(
             )
             InetAddress.getByAddress(ipBytes)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get local IP address", e)
+            Log.e(TAG, "Local address discovery failed: ${e.javaClass.simpleName}")
             null
         }
     }

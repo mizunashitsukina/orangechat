@@ -9,7 +9,11 @@ package me.rerere.rikkahub.data.datastore.migration
 import android.util.Log
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.rikkahub.utils.JsonInstant
 
 private const val TAG = "SettingsJsonMigrator"
@@ -30,6 +34,22 @@ object SettingsJsonMigrator {
     fun migrate(settingsJson: String): String {
         return runCatching {
             val root = JsonInstant.parseToJsonElement(settingsJson).jsonObject.toMutableMap()
+
+            // Missing in older backups: preserve LAN only when the legacy configuration already
+            // has complete authentication. Otherwise migrate to loopback. Explicit choices are
+            // preserved and independently checked again by the runtime policy.
+            if ("webServerLocalhostOnly" !in root) {
+                val legacyJwtEnabled = root["webServerJwtEnabled"]
+                    ?.jsonPrimitive
+                    ?.booleanOrNull == true
+                val legacyPassword = root["webServerAccessPassword"]
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+                    .orEmpty()
+                root["webServerLocalhostOnly"] = JsonPrimitive(
+                    !(legacyJwtEnabled && legacyPassword.isNotBlank())
+                )
+            }
 
             // V1: 修复 mcpServers 中全限定类名的 type 字段
             root["mcpServers"]?.let { element ->
@@ -69,7 +89,7 @@ object SettingsJsonMigrator {
 
             JsonInstant.encodeToString(JsonObject(root))
         }.onFailure {
-            Log.e(TAG, "migrate: Failed to migrate settings JSON, using original", it)
+            Log.e(TAG, "Settings JSON migration failed: ${it.javaClass.simpleName}")
         }.getOrDefault(settingsJson)
     }
 }

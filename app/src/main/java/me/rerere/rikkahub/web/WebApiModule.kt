@@ -66,10 +66,9 @@ fun Application.configureWebApi(
     chatService: ChatService,
     conversationRepo: ConversationRepository,
     settingsStore: SettingsStore,
-    filesManager: FilesManager
+    filesManager: FilesManager,
+    jwtEnabled: Boolean = settingsStore.settingsFlow.value.webServerJwtEnabled,
 ) {
-    val jwtEnabled = settingsStore.settingsFlow.value.webServerJwtEnabled
-
     install(ContentNegotiation) {
         json(JsonInstant)
     }
@@ -81,10 +80,10 @@ fun Application.configureWebApi(
         exception<ApiException> { call, cause ->
             call.respond(cause.status, ErrorResponse(cause.message, cause.status.value))
         }
-        exception<Throwable> { call, cause ->
+        exception<Throwable> { call, _ ->
             call.respond(
                 HttpStatusCode.InternalServerError,
-                ErrorResponse(cause.message ?: "Internal server error", 500)
+                ErrorResponse("Internal server error", 500)
             )
         }
     }

@@ -281,7 +281,9 @@ class SettingsStore(
                 webServerPort = preferences[WEB_SERVER_PORT] ?: 8080,
                 webServerJwtEnabled = preferences[WEB_SERVER_JWT_ENABLED] == true,
                 webServerAccessPassword = preferences[WEB_SERVER_ACCESS_PASSWORD] ?: "",
-                webServerLocalhostOnly = preferences[WEB_SERVER_LOCALHOST_ONLY] == true,
+                webServerLocalhostOnly = preferences[WEB_SERVER_LOCALHOST_ONLY]
+                    ?: !(preferences[WEB_SERVER_JWT_ENABLED] == true &&
+                        !preferences[WEB_SERVER_ACCESS_PASSWORD].isNullOrBlank()),
                 backupReminderConfig = preferences[BACKUP_REMINDER_CONFIG]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: BackupReminderConfig(),
@@ -616,7 +618,7 @@ data class Settings(
     val webServerPort: Int = 8080,
     val webServerJwtEnabled: Boolean = false,
     val webServerAccessPassword: String = "",
-    val webServerLocalhostOnly: Boolean = false,
+    val webServerLocalhostOnly: Boolean = true,
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
     val launchCount: Int = 0,
     val sponsorAlertDismissedAt: Int = 0,
