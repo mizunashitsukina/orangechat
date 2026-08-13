@@ -20,7 +20,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -262,11 +261,12 @@ class LocalBackupServiceTest {
     @Test
     fun cancellationPropagatesAndCleansEncryptedImportOutput() = withTempDir { root ->
         val cancellation = CancellationException("test-cancellation")
-        var restored = false
+        var decryptCalls = 0
+        var restoreCalls = 0
         lateinit var decryptedOutput: File
         val service = service(
             root = root,
-            restoreArchive = { restored = true },
+            restoreArchive = { restoreCalls++ },
             crypto = object : LocalBackupContainerCrypto {
                 override fun encrypt(
                     source: File,
@@ -281,6 +281,7 @@ class LocalBackupServiceTest {
                     password: CharArray,
                     cancellationCheck: () -> Unit,
                 ) {
+                    decryptCalls++
                     decryptedOutput = destination
                     destination.writeText("unverified-plaintext-marker")
                     throw cancellation
@@ -291,16 +292,17 @@ class LocalBackupServiceTest {
         val stagedInput = staged.file
         val suppliedPassword = PASSWORD.copyOf()
 
-        runBlocking {
-            try {
-                service.restore(staged, suppliedPassword)
-                fail("Expected cancellation")
-            } catch (e: CancellationException) {
-                assertSame(cancellation, e)
-            }
+        var cancellationObserved = false
+        try {
+            runBlocking { service.restore(staged, suppliedPassword) }
+            fail("Expected cancellation")
+        } catch (_: CancellationException) {
+            cancellationObserved = true
         }
 
-        assertFalse(restored)
+        assertTrue(cancellationObserved)
+        assertEquals(1, decryptCalls)
+        assertEquals(0, restoreCalls)
         assertFalse(decryptedOutput.exists())
         assertFalse(stagedInput.exists())
         assertTrue(suppliedPassword.all { it == '\u0000' })
