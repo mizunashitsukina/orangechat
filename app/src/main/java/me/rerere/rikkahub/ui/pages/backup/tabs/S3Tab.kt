@@ -59,6 +59,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.sync.S3BackupItem
@@ -272,12 +273,13 @@ fun S3Tab(
                                 context.getString(R.string.backup_page_connection_success),
                                 type = ToastType.Success
                             )
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
                             toaster.show(
                                 context.getString(
                                     R.string.backup_page_connection_failed,
-                                    e.message ?: ""
+                                    ""
                                 ),
                                 type = ToastType.Error
                             )
@@ -300,21 +302,23 @@ fun S3Tab(
                 onClick = {
                     scope.launch {
                         isBackingUp = true
-                        runCatching {
+                        try {
                             vm.backupToS3()
                             vm.loadS3BackupFileItems()
                             toaster.show(
                                 context.getString(R.string.backup_page_backup_success),
                                 type = ToastType.Success
                             )
-                        }.onFailure {
-                            it.printStackTrace()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
                             toaster.show(
-                                it.message ?: context.getString(R.string.backup_page_unknown_error),
+                                context.getString(R.string.backup_page_unknown_error),
                                 type = ToastType.Error
                             )
+                        } finally {
+                            isBackingUp = false
                         }
-                        isBackingUp = false
                     }
                 },
                 enabled = !isBackingUp
@@ -371,19 +375,20 @@ fun S3Tab(
                                 isRestoring = restoringItemId == item.displayName,
                                 onDelete = {
                                     scope.launch {
-                                        runCatching {
+                                        try {
                                             vm.deleteS3BackupFile(item)
                                             toaster.show(
                                                 context.getString(R.string.backup_page_delete_success),
                                                 type = ToastType.Success
                                             )
                                             vm.loadS3BackupFileItems()
-                                        }.onFailure { err ->
-                                            err.printStackTrace()
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,
-                                                    err.message ?: ""
+                                                    ""
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -393,7 +398,7 @@ fun S3Tab(
                                 onRestore = { restoreItem ->
                                     scope.launch {
                                         restoringItemId = restoreItem.displayName
-                                        runCatching {
+                                        try {
                                             vm.restoreFromS3(item = restoreItem)
                                             toaster.show(
                                                 context.getString(R.string.backup_page_restore_success),
@@ -401,17 +406,19 @@ fun S3Tab(
                                             )
                                             showBackupFiles = false
                                             onShowRestartDialog()
-                                        }.onFailure { err ->
-                                            err.printStackTrace()
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_restore_failed,
-                                                    err.message ?: ""
+                                                    ""
                                                 ),
                                                 type = ToastType.Error
                                             )
+                                        } finally {
+                                            restoringItemId = null
                                         }
-                                        restoringItemId = null
                                     }
                                 },
                             )
@@ -423,7 +430,7 @@ fun S3Tab(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = stringResource(R.string.backup_page_loading_failed, it.message ?: ""),
+                            text = stringResource(R.string.backup_page_loading_failed, ""),
                             color = MaterialTheme.colorScheme.error
                         )
                     }

@@ -30,12 +30,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.dokar.sonner.ToastType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.StickyHeader
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.pages.backup.BackupVM
+import me.rerere.rikkahub.data.sync.BackupArchiveFailure
+import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
+import me.rerere.rikkahub.data.sync.MAX_BACKUP_COMPRESSED_BYTES
+import me.rerere.rikkahub.data.sync.MAX_THIRD_PARTY_IMPORT_BYTES
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -63,32 +68,38 @@ fun ImportExportTab(
         uri?.let { targetUri ->
             scope.launch {
                 isExporting = true
-                runCatching {
+                var exportFile: File? = null
+                try {
                     // 导出文件
-                    val exportFile = vm.exportToFile()
+                    exportFile = vm.exportToFile()
 
                     // 复制到用户选择的位置
                     context.contentResolver.openOutputStream(targetUri)?.use { outputStream ->
-                        FileInputStream(exportFile).use { inputStream ->
-                            inputStream.copyTo(outputStream)
+                        FileInputStream(exportFile!!).use { inputStream ->
+                            BackupArchiveSecurity.copyLimited(
+                                inputStream,
+                                outputStream,
+                                MAX_BACKUP_COMPRESSED_BYTES,
+                                BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+                            )
                         }
-                    }
-
-                    // 清理临时文件
-                    exportFile.delete()
+                    } ?: throw IllegalArgumentException("Unable to open export destination")
 
                     toaster.show(
                         context.getString(R.string.backup_page_backup_success),
                         type = ToastType.Success
                     )
-                }.onFailure { e ->
-                    e.printStackTrace()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
                     toaster.show(
-                        context.getString(R.string.backup_page_restore_failed, e.message ?: ""),
+                        context.getString(R.string.backup_page_restore_failed, ""),
                         type = ToastType.Error
                     )
+                } finally {
+                    exportFile?.delete()
+                    isExporting = false
                 }
-                isExporting = false
             }
         }
     }
@@ -100,60 +111,58 @@ fun ImportExportTab(
         uri?.let { sourceUri ->
             scope.launch {
                 isRestoring = true
-                runCatching {
+                var tempFile: File? = null
+                try {
                     when (importType) {
                         "local" -> {
-                            // 本地备份导入：处理zip文件
-                            val tempFile =
-                                File(context.cacheDir, "temp_restore_${System.currentTimeMillis()}.zip")
+                            tempFile = File.createTempFile("backup-import-", ".zip", context.cacheDir)
 
                             context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
-                                FileOutputStream(tempFile).use { outputStream ->
-                                    inputStream.copyTo(outputStream)
+                                FileOutputStream(tempFile!!).use { outputStream ->
+                                    BackupArchiveSecurity.copyLimited(
+                                        inputStream,
+                                        outputStream,
+                                        MAX_BACKUP_COMPRESSED_BYTES,
+                                        BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+                                    )
                                 }
-                            }
+                            } ?: throw IllegalArgumentException("Unable to read selected backup")
 
-                            // 从临时文件恢复
-                            vm.restoreFromLocalFile(tempFile)
-
-                            // 清理临时文件
-                            tempFile.delete()
+                            vm.restoreFromLocalFile(tempFile!!)
                         }
 
                         "chatbox" -> {
-                            // Chatbox导入：处理json文件
-                            val tempFile =
-                                File(context.cacheDir, "temp_chatbox_${System.currentTimeMillis()}.json")
+                            tempFile = File.createTempFile("chatbox-import-", ".json", context.cacheDir)
 
                             context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
-                                FileOutputStream(tempFile).use { outputStream ->
-                                    inputStream.copyTo(outputStream)
+                                FileOutputStream(tempFile!!).use { outputStream ->
+                                    BackupArchiveSecurity.copyLimited(
+                                        inputStream,
+                                        outputStream,
+                                        MAX_THIRD_PARTY_IMPORT_BYTES,
+                                        BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+                                    )
                                 }
-                            }
+                            } ?: throw IllegalArgumentException("Unable to read selected import")
 
-                            // 从Chatbox文件恢复
-                            vm.restoreFromChatBox(tempFile)
-
-                            // 清理临时文件
-                            tempFile.delete()
+                            vm.restoreFromChatBox(tempFile!!)
                         }
 
                         "cherry" -> {
-                            // Cherry Studio导入：处理zip文件
-                            val tempFile =
-                                File(context.cacheDir, "temp_cherry_${System.currentTimeMillis()}.zip")
+                            tempFile = File.createTempFile("cherry-import-", ".zip", context.cacheDir)
 
                             context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
-                                FileOutputStream(tempFile).use { outputStream ->
-                                    inputStream.copyTo(outputStream)
+                                FileOutputStream(tempFile!!).use { outputStream ->
+                                    BackupArchiveSecurity.copyLimited(
+                                        inputStream,
+                                        outputStream,
+                                        MAX_THIRD_PARTY_IMPORT_BYTES,
+                                        BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+                                    )
                                 }
-                            }
+                            } ?: throw IllegalArgumentException("Unable to read selected import")
 
-                            // 从Cherry Studio备份恢复
-                            vm.restoreFromCherryStudio(tempFile)
-
-                            // 清理临时文件
-                            tempFile.delete()
+                            vm.restoreFromCherryStudio(tempFile!!)
                         }
                     }
 
@@ -162,14 +171,17 @@ fun ImportExportTab(
                         type = ToastType.Success
                     )
                     onShowRestartDialog()
-                }.onFailure { e ->
-                    e.printStackTrace()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
                     toaster.show(
-                        context.getString(R.string.backup_page_restore_failed, e.message ?: ""),
+                        context.getString(R.string.backup_page_restore_failed, ""),
                         type = ToastType.Error
                     )
+                } finally {
+                    tempFile?.delete()
+                    isRestoring = false
                 }
-                isRestoring = false
             }
         }
     }

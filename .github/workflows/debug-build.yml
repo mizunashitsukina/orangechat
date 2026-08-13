@@ -70,7 +70,8 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest \
             --tests "me.rerere.rikkahub.data.ai.RequestLoggingInterceptorTest" \
-            --tests "me.rerere.rikkahub.web.WebServerSecurityPolicyTest"
+            --tests "me.rerere.rikkahub.web.WebServerSecurityPolicyTest" \
+            --tests "me.rerere.rikkahub.data.sync.BackupArchiveSecurityTest"
 
       - name: Assemble Debug APK
         run: |

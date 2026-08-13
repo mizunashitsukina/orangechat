@@ -17,7 +17,6 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.HttpStatement
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
@@ -25,8 +24,13 @@ import io.ktor.utils.io.jvm.javaio.toInputStream
 import io.ktor.utils.io.readAvailable
 import io.ktor.util.cio.readChannel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.WebDavConfig
+import me.rerere.rikkahub.data.sync.BackupArchiveException
+import me.rerere.rikkahub.data.sync.BackupArchiveFailure
+import me.rerere.rikkahub.data.sync.MAX_BACKUP_COMPRESSED_BYTES
+import me.rerere.rikkahub.data.sync.MAX_REMOTE_METADATA_BYTES
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.InputStream
@@ -59,9 +63,9 @@ class WebDavClient(
         data: ByteArray,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "PUT: $url")
+            Log.d(TAG, "WebDAV PUT started")
 
             val response: HttpResponse = httpClient.request(url) {
                 method = HttpMethod.Put
@@ -74,12 +78,11 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "put failed: ${response.status} - $errorBody")
-                throw WebDavException("Failed to put: ${response.status}", response.status.value, errorBody)
+                Log.e(TAG, "WebDAV PUT failed: status=${response.status.value}")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
-            Log.d(TAG, "put success: $path")
+            Log.d(TAG, "WebDAV PUT succeeded")
             Unit
         }
     }
@@ -89,9 +92,9 @@ class WebDavClient(
         file: File,
         contentType: String = "application/octet-stream",
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "PUT (stream file): $url")
+            Log.d(TAG, "WebDAV file upload started")
 
             val response: HttpResponse = httpClient.request(url) {
                 method = HttpMethod.Put
@@ -105,20 +108,19 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "put(file) failed: ${response.status} - $errorBody")
-                throw WebDavException("Failed to put file: ${response.status}", response.status.value, errorBody)
+                Log.e(TAG, "WebDAV file upload failed: status=${response.status.value}")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
-            Log.d(TAG, "put(file) success: $path (${file.length()} bytes)")
+            Log.d(TAG, "WebDAV file upload succeeded: bytes=${file.length()}")
             Unit
         }
     }
 
     suspend fun get(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "GET: $url")
+            Log.d(TAG, "WebDAV GET started")
 
             val response: HttpResponse = httpClient.request(url) {
                 method = HttpMethod.Get
@@ -126,20 +128,28 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "get failed: ${response.status} - $errorBody")
-                throw WebDavException("Failed to get: ${response.status}", response.status.value, errorBody)
+                Log.e(TAG, "WebDAV GET failed: status=${response.status.value}")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
             val channel = response.bodyAsChannel()
-            channel.toInputStream().readBytes()
+            channel.toInputStream().use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                me.rerere.rikkahub.data.sync.BackupArchiveSecurity.copyLimited(
+                    input,
+                    output,
+                    MAX_BACKUP_COMPRESSED_BYTES,
+                    BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+                )
+                output.toByteArray()
+            }
         }
     }
 
     suspend fun getStream(path: String): Result<InputStream> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "GET (stream): $url")
+            Log.d(TAG, "WebDAV stream GET started")
 
             val response: HttpResponse = httpClient.request(url) {
                 method = HttpMethod.Get
@@ -147,50 +157,57 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "getStream failed: ${response.status} - $errorBody")
-                throw WebDavException("Failed to get stream: ${response.status}", response.status.value, errorBody)
+                Log.e(TAG, "WebDAV stream GET failed: status=${response.status.value}")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
             response.bodyAsChannel().toInputStream()
         }
     }
 
-    suspend fun downloadToFile(path: String, targetFile: File): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+    suspend fun downloadToFile(
+        path: String,
+        targetFile: File,
+        maxBytes: Long = MAX_BACKUP_COMPRESSED_BYTES,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "GET (download to file): $url")
+            Log.d(TAG, "WebDAV download started")
 
             httpClient.prepareRequest(url) {
                 method = HttpMethod.Get
                 basicAuth(config.username, config.password)
             }.execute { response ->
                 if (!response.status.isSuccess()) {
-                    val errorBody = response.bodyAsText()
-                    Log.e(TAG, "downloadToFile failed: ${response.status} - $errorBody")
-                    throw WebDavException("Failed to download: ${response.status}", response.status.value, errorBody)
+                    Log.e(TAG, "WebDAV download failed: status=${response.status.value}")
+                    throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
                 }
 
                 val channel = response.bodyAsChannel()
                 targetFile.outputStream().use { outputStream ->
                     val buffer = ByteArray(8192)
+                    var downloaded = 0L
                     while (!channel.isClosedForRead) {
                         val bytesRead = channel.readAvailable(buffer)
                         if (bytesRead > 0) {
+                            if (bytesRead > maxBytes - downloaded) {
+                                throw BackupArchiveException(BackupArchiveFailure.ARCHIVE_TOO_LARGE)
+                            }
                             outputStream.write(buffer, 0, bytesRead)
+                            downloaded += bytesRead
                         }
                     }
                 }
-                Log.d(TAG, "downloadToFile success: downloaded ${targetFile.length()} bytes")
+                Log.d(TAG, "WebDAV download succeeded: bytes=${targetFile.length()}")
             }
             Unit
         }
     }
 
     suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "DELETE: $url")
+            Log.d(TAG, "WebDAV DELETE started")
 
             val response: HttpResponse = httpClient.request(url) {
                 method = HttpMethod.Delete
@@ -198,20 +215,19 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "delete failed: ${response.status} - $errorBody")
-                throw WebDavException("Failed to delete: ${response.status}", response.status.value, errorBody)
+                Log.e(TAG, "WebDAV DELETE failed: status=${response.status.value}")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
-            Log.d(TAG, "delete success: $path")
+            Log.d(TAG, "WebDAV DELETE succeeded")
             Unit
         }
     }
 
     suspend fun head(path: String): Result<WebDavResourceInfo> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "HEAD: $url")
+            Log.d(TAG, "WebDAV HEAD started")
 
             val response: HttpResponse = httpClient.request(url) {
                 method = HttpMethod.Head
@@ -219,7 +235,7 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess()) {
-                throw WebDavException("Resource not found: ${response.status}", response.status.value, "")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
             WebDavResourceInfo(
@@ -234,9 +250,9 @@ class WebDavClient(
     }
 
     suspend fun mkcol(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "MKCOL: $url")
+            Log.d(TAG, "WebDAV MKCOL started")
 
             val response: HttpResponse = httpClient.request(url) {
                 method = HttpMethod("MKCOL")
@@ -245,12 +261,11 @@ class WebDavClient(
 
             // 201 Created or 405 Method Not Allowed (already exists) are acceptable
             if (!response.status.isSuccess() && response.status != HttpStatusCode.MethodNotAllowed) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "mkcol failed: ${response.status} - $errorBody")
-                throw WebDavException("Failed to create collection: ${response.status}", response.status.value, errorBody)
+                Log.e(TAG, "WebDAV MKCOL failed: status=${response.status.value}")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
-            Log.d(TAG, "mkcol success: $path")
+            Log.d(TAG, "WebDAV MKCOL succeeded")
             Unit
         }
     }
@@ -259,9 +274,9 @@ class WebDavClient(
         path: String = "",
         depth: Int = 1,
     ): Result<List<WebDavResourceInfo>> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = config.buildUrl(path)
-            Log.d(TAG, "PROPFIND: $url, depth: $depth")
+            Log.d(TAG, "WebDAV PROPFIND started: depth=$depth")
 
             val propfindBody = """<?xml version="1.0" encoding="UTF-8"?>
                 |<D:propfind xmlns:D="DAV:">
@@ -286,12 +301,20 @@ class WebDavClient(
             }
 
             if (!response.status.isSuccess() && response.status.value != 207) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "propfind failed: ${response.status} - $errorBody")
-                throw WebDavException("Failed to propfind: ${response.status}", response.status.value, errorBody)
+                Log.e(TAG, "WebDAV PROPFIND failed: status=${response.status.value}")
+                throw WebDavException("WebDAV request failed: ${response.status.value}", response.status.value)
             }
 
-            val xmlBody = response.bodyAsText()
+            val xmlBody = response.bodyAsChannel().toInputStream().use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                me.rerere.rikkahub.data.sync.BackupArchiveSecurity.copyLimited(
+                    input,
+                    output,
+                    MAX_REMOTE_METADATA_BYTES,
+                    BackupArchiveFailure.ENTRY_TOO_LARGE,
+                )
+                output.toString(Charsets.UTF_8.name())
+            }
             parsePropfindResponse(xmlBody, url)
         }
     }
@@ -301,15 +324,14 @@ class WebDavClient(
     }
 
     suspend fun ensureCollectionExists(path: String = ""): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val targetUrl = config.buildUrl(path)
-            Log.d(TAG, "Ensuring collection exists: $targetUrl")
+        runSuspendCatching {
+            Log.d(TAG, "WebDAV collection check started")
 
             // Try propfind first to check if it exists
             val propfindResult = propfind(path, depth = 0)
             if (propfindResult.isSuccess) {
-                Log.d(TAG, "Collection already exists: $targetUrl")
-                return@runCatching
+                Log.d(TAG, "WebDAV collection exists")
+                return@runSuspendCatching
             }
 
             // Create collection if not exists
@@ -318,7 +340,7 @@ class WebDavClient(
     }
 
     suspend fun list(path: String = ""): Result<List<WebDavResourceInfo>> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val result = propfind(path, depth = 1).getOrThrow()
             // Filter out the parent directory itself (first entry)
             if (result.isNotEmpty()) {
@@ -418,7 +440,7 @@ class WebDavClient(
                     // ISO 8601
                     Instant.parse(dateString)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to parse date: $dateString")
+                    Log.w(TAG, "WebDAV date parse failed")
                     null
                 }
             }
@@ -438,5 +460,12 @@ data class WebDavResourceInfo(
 class WebDavException(
     message: String,
     val statusCode: Int,
-    val responseBody: String,
 ) : Exception(message)
+
+private inline fun <T> runSuspendCatching(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Throwable) {
+    Result.failure(e)
+}

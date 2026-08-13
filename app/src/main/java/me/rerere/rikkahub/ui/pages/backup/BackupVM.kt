@@ -9,6 +9,7 @@ package me.rerere.rikkahub.ui.pages.backup
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -16,12 +17,13 @@ import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.repository.ConversationRepository
+import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
+import me.rerere.rikkahub.data.sync.S3BackupItem
+import me.rerere.rikkahub.data.sync.S3Sync
 import me.rerere.rikkahub.data.sync.importer.ChatboxImporter
 import me.rerere.rikkahub.data.sync.importer.CherryStudioProviderImporter
 import me.rerere.rikkahub.data.sync.webdav.WebDavBackupItem
 import me.rerere.rikkahub.data.sync.webdav.WebDavSync
-import me.rerere.rikkahub.data.sync.S3BackupItem
-import me.rerere.rikkahub.data.sync.S3Sync
 import me.rerere.rikkahub.utils.UiState
 import java.io.File
 
@@ -55,7 +57,7 @@ class BackupVM(
 
     fun loadBackupFileItems() {
         viewModelScope.launch {
-            runCatching {
+            try {
                 webDavBackupItems.emit(UiState.Loading)
                 webDavBackupItems.emit(
                     value = UiState.Success(
@@ -64,8 +66,11 @@ class BackupVM(
                         ).sortedByDescending { it.lastModified }
                     )
                 )
-            }.onFailure {
-                webDavBackupItems.emit(UiState.Error(it))
+            } catch (e: CancellationException) {
+                webDavBackupItems.value = UiState.Idle
+                throw e
+            } catch (e: Exception) {
+                webDavBackupItems.emit(UiState.Error(e))
             }
         }
     }
@@ -88,9 +93,10 @@ class BackupVM(
     }
 
     suspend fun exportToFile(): File {
-        val file = webDavSync.prepareBackupFile(settings.value.webDavConfig.copy())
-        recordBackupTime()
-        return file
+        return BackupArchiveSecurity.transferTemporaryFileOwnership(
+            prepare = { webDavSync.prepareBackupFile(settings.value.webDavConfig.copy()) },
+            beforeTransfer = { recordBackupTime() },
+        )
     }
 
     suspend fun restoreFromLocalFile(file: File) {
@@ -147,16 +153,16 @@ class BackupVM(
         )
     }
 
-    fun restoreFromCherryStudio(file: File) {
+    suspend fun restoreFromCherryStudio(file: File) {
         val importProviders = CherryStudioProviderImporter.importProviders(file)
 
         if (importProviders.isEmpty()) {
             throw IllegalArgumentException("No importable providers found in Cherry Studio backup")
         }
 
-        Log.i(TAG, "restoreFromCherryStudio: import ${importProviders.size} providers: $importProviders")
+        Log.i(TAG, "restoreFromCherryStudio: imported ${importProviders.size} providers")
 
-        updateSettings(
+        settingsStore.update(
             settings.value.copy(
                 providers = importProviders + settings.value.providers,
             )
@@ -166,7 +172,7 @@ class BackupVM(
     // S3 Backup methods
     fun loadS3BackupFileItems() {
         viewModelScope.launch {
-            runCatching {
+            try {
                 s3BackupItems.emit(UiState.Loading)
                 s3BackupItems.emit(
                     value = UiState.Success(
@@ -175,8 +181,11 @@ class BackupVM(
                         )
                     )
                 )
-            }.onFailure {
-                s3BackupItems.emit(UiState.Error(it))
+            } catch (e: CancellationException) {
+                s3BackupItems.value = UiState.Idle
+                throw e
+            } catch (e: Exception) {
+                s3BackupItems.emit(UiState.Error(e))
             }
         }
     }
