@@ -72,7 +72,8 @@ jobs:
             --tests "me.rerere.rikkahub.data.ai.RequestLoggingInterceptorTest" \
             --tests "me.rerere.rikkahub.web.WebServerSecurityPolicyTest" \
             --tests "me.rerere.rikkahub.data.sync.BackupArchiveSecurityTest" \
-            --tests "me.rerere.rikkahub.data.sync.AndroidSystemBackupRulesTest"
+            --tests "me.rerere.rikkahub.data.sync.AndroidSystemBackupRulesTest" \
+            --tests "me.rerere.rikkahub.data.sync.BackupContainerTest"
 
       - name: Assemble Debug APK
         run: |
