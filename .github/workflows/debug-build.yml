@@ -166,14 +166,19 @@ jobs:
           printf '%s\n' "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           printf '%s\n' "$sdk_root/platform-tools" >> "$GITHUB_PATH"
           printf '%s\n' "$sdk_root/emulator" >> "$GITHUB_PATH"
-          printf 'ANDROID_SDK_ROOT_RESOLVED=%s\n' "$sdk_root" >> "$GITHUB_ENV"
+          printf 'SDK_ROOT=%s\n' "$sdk_root" >> "$GITHUB_ENV"
+          android_user_home="$RUNNER_TEMP/android-user-home"
+          android_avd_home="$RUNNER_TEMP/android-avd"
+          mkdir -p "$android_user_home" "$android_avd_home"
+          printf 'ANDROID_USER_HOME=%s\n' "$android_user_home" >> "$GITHUB_ENV"
+          printf 'ANDROID_AVD_HOME=%s\n' "$android_avd_home" >> "$GITHUB_ENV"
           "$sdkmanager_path" --version
 
       - name: Install official Android API 26 emulator image
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager_path="$ANDROID_SDK_ROOT_RESOLVED/cmdline-tools/latest/bin/sdkmanager"
+          sdkmanager_path="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           set +e
           set +o pipefail
           yes | "$sdkmanager_path" --licenses >/dev/null
@@ -189,11 +194,30 @@ jobs:
             "emulator" \
             "platforms;android-26" \
             "system-images;android-26;google_apis;x86_64"
-          echo "no" | avdmanager create avd \
+          avdmanager_path="$SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
+          emulator_path="$SDK_ROOT/emulator/emulator"
+          [[ -x "$avdmanager_path" ]]
+          [[ -x "$emulator_path" ]]
+          mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
+          echo "no" | "$avdmanager_path" create avd \
             --force \
             --name orangechat-api26 \
             --package "system-images;android-26;google_apis;x86_64" \
             --device "pixel"
+
+          avd_list="$("$emulator_path" -list-avds)"
+          printf '%s\n' "$avd_list"
+          if ! grep -Fxq "orangechat-api26" <<< "$avd_list"; then
+            echo "The API 26 AVD was not listed after creation." >&2
+            find "$ANDROID_AVD_HOME" -mindepth 1 -maxdepth 2 -printf '%P\n' | sort >&2
+            exit 1
+          fi
+          if [[ ! -f "$ANDROID_AVD_HOME/orangechat-api26.ini" ||
+                ! -d "$ANDROID_AVD_HOME/orangechat-api26.avd" ]]; then
+            echo "The API 26 AVD definition is incomplete in the configured AVD directory." >&2
+            find "$ANDROID_AVD_HOME" -mindepth 1 -maxdepth 2 -printf '%P\n' | sort >&2
+            exit 1
+          fi
 
       - name: Run backup crypto compatibility test on API 26
         shell: bash
@@ -201,8 +225,18 @@ jobs:
           set -euo pipefail
           chmod +x gradlew
           sudo chmod 666 /dev/kvm
+          emulator_path="$SDK_ROOT/emulator/emulator"
+          avd_list="$("$emulator_path" -list-avds)"
+          printf '%s\n' "$avd_list"
+          if ! grep -Fxq "orangechat-api26" <<< "$avd_list"; then
+            echo "The API 26 AVD is unavailable before emulator startup." >&2
+            find "$ANDROID_AVD_HOME" -mindepth 1 -maxdepth 2 -printf '%P\n' | sort >&2
+            exit 1
+          fi
+          [[ -f "$ANDROID_AVD_HOME/orangechat-api26.ini" ]]
+          [[ -d "$ANDROID_AVD_HOME/orangechat-api26.avd" ]]
           emulator_log="$RUNNER_TEMP/orangechat-api26-emulator.log"
-          emulator \
+          "$emulator_path" \
             -avd orangechat-api26 \
             -no-window \
             -no-audio \
