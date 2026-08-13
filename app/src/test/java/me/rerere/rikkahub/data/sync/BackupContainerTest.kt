@@ -39,7 +39,7 @@ class BackupContainerTest {
         assertEquals(1, records.size)
         assertEquals(RECORD_END, records.single().type)
         assertEquals(0, records.single().index)
-        assertEquals(0, records.single().plaintextBytes)
+        assertEquals(TERMINAL_PLAINTEXT_BYTES, records.single().plaintextBytes)
     }
 
     @Test
@@ -88,6 +88,23 @@ class BackupContainerTest {
         assertArrayEquals((0x20..0x27).map { it.toByte() }.toByteArray(), bytes.copyOfRange(44, 52))
         assertEquals(listOf(0, 1, 2), records.map { it.index })
         assertEquals(listOf(RECORD_DATA, RECORD_DATA, RECORD_END), records.map { it.type })
+    }
+
+    @Test
+    fun formatMatchesIndependentAesGcmAndPbkdf2ReferenceVector() = withTempDir { root ->
+        val plaintext = "provider-compatibility".toByteArray()
+        val source = root.resolve("vector.zip").apply { writeBytes(plaintext) }
+        val container = root.resolve("vector.ocbackup")
+        val options = BackupContainerWriteOptions(
+            chunkBytes = CHUNK_BYTES,
+            kdfIterations = TEST_ITERATIONS,
+            random = IncrementingRandom(1),
+        )
+
+        BackupContainer.encryptForTesting(source, container, TEST_PASSWORD.copyOf(), testLimits(), options)
+
+        assertArrayEquals(INDEPENDENT_REFERENCE_VECTOR.hexToBytes(), container.readBytes())
+        assertArrayEquals(plaintext, decrypt(root, container, name = "vector"))
     }
 
     @Test
@@ -141,6 +158,15 @@ class BackupContainerTest {
     }
 
     @Test
+    fun deletedLastDataChunkFailsAgainstAuthenticatedTerminalState() = withTempDir { root ->
+        val bytes = encrypt(root, patternedBytes(CHUNK_BYTES * 2)).readBytes()
+        val records = parseRecords(bytes)
+        val withoutLastData = removeRange(bytes, records[1].startOffset, records[1].endOffset)
+
+        assertAuthenticationFailure(root, withoutLastData)
+    }
+
+    @Test
     fun reorderedChunksFail() = withTempDir { root ->
         val bytes = encrypt(root, patternedBytes(CHUNK_BYTES * 2)).readBytes()
         val records = parseRecords(bytes)
@@ -183,6 +209,15 @@ class BackupContainerTest {
         val bytes = encrypt(root, patternedBytes(16)).readBytes()
 
         assertAuthenticationFailure(root, bytes.copyOf(bytes.size - 1))
+    }
+
+    @Test
+    fun modifiedAuthenticatedTerminalStateFails() = withTempDir { root ->
+        val bytes = encrypt(root, patternedBytes(CHUNK_BYTES + 17)).readBytes()
+        val terminal = parseRecords(bytes).last()
+        bytes[terminal.ciphertextOffset] = (bytes[terminal.ciphertextOffset].toInt() xor 1).toByte()
+
+        assertAuthenticationFailure(root, bytes)
     }
 
     @Test
@@ -429,6 +464,8 @@ class BackupContainerTest {
 
     private fun patternedBytes(size: Int): ByteArray = ByteArray(size) { index -> (index * 31).toByte() }
 
+    private fun String.hexToBytes(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
     private fun assertNoTemporaryFiles(root: File) {
         assertTrue(root.listFiles().orEmpty().none { it.name.startsWith(".ocbackup-") && it.name.endsWith(".tmp") })
     }
@@ -482,6 +519,7 @@ class BackupContainerTest {
         private const val RECORD_HEADER_BYTES = 13
         private const val RECORD_DATA = 1
         private const val RECORD_END = 2
+        private const val TERMINAL_PLAINTEXT_BYTES = 12
         private const val VERSION_OFFSET = 4
         private const val ALGORITHM_OFFSET = 5
         private const val KDF_OFFSET = 6
@@ -492,6 +530,12 @@ class BackupContainerTest {
         private const val RECORD_CIPHERTEXT_LENGTH_OFFSET = 9
         private const val CHUNK_BYTES = 4 * 1024
         private const val TEST_ITERATIONS = 2
+        // Generated independently with Python cryptography 50.0.0 from the documented version 1 byte format.
+        private const val INDEPENDENT_REFERENCE_VECTOR =
+            "4f43424b0101010000000034000000020000100000100008000000000102030405060708090a0b0c0d0e0f10" +
+                "1112131415161718010000000000000016000000260369d6138ddb3af3349decc2731da6e5f525350415e503" +
+                "a778d00705d8155246626b0689361002000000010000000c0000001c86d5b3c4654ec1148ca59b21b976662" +
+                "f546de30279a40063fc119325"
         private val TEST_PASSWORD = "unit-test-password".toCharArray()
     }
 }

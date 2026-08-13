@@ -83,6 +83,7 @@ internal object BackupContainer {
     private const val RECORD_HEADER_BYTES: Int = 13
     private const val RECORD_DATA: Int = 1
     private const val RECORD_END: Int = 2
+    private const val TERMINAL_PLAINTEXT_BYTES: Int = Long.SIZE_BYTES + Int.SIZE_BYTES
 
     fun encrypt(
         source: File,
@@ -157,7 +158,9 @@ internal object BackupContainer {
         try {
             validatePolicy(limits)
             validateDistinctFiles(source, destination)
-            if (!source.isFile || source.length() < HEADER_BYTES + RECORD_HEADER_BYTES + BACKUP_GCM_TAG_BYTES) {
+            if (!source.isFile ||
+                source.length() < HEADER_BYTES + RECORD_HEADER_BYTES + TERMINAL_PLAINTEXT_BYTES + BACKUP_GCM_TAG_BYTES
+            ) {
                 throw BackupContainerException(BackupContainerFailure.INVALID_FORMAT)
             }
             if (source.length() > limits.maxContainerBytes) {
@@ -234,26 +237,31 @@ internal object BackupContainer {
                 }
 
                 cancellationCheck()
-                val terminal = encodeRecord(
-                    RECORD_END,
-                    chunkIndex,
-                    plaintextBytes = 0,
-                    ciphertextBytes = BACKUP_GCM_TAG_BYTES,
-                )
-                val authenticationTag = BackupCrypto.encrypt(
-                    key,
-                    BackupCrypto.nonce(noncePrefix, chunkIndex),
-                    header,
-                    terminal,
-                    plaintext,
-                    plaintextLength = 0,
-                )
+                val terminalPlaintext = encodeTerminalPlaintext(totalPlaintext, chunkIndex)
                 try {
-                    limitedOutput.write(terminal)
-                    limitedOutput.write(authenticationTag)
-                    limitedOutput.flush()
+                    val terminal = encodeRecord(
+                        RECORD_END,
+                        chunkIndex,
+                        plaintextBytes = terminalPlaintext.size,
+                        ciphertextBytes = terminalPlaintext.size + BACKUP_GCM_TAG_BYTES,
+                    )
+                    val authenticatedTerminal = BackupCrypto.encrypt(
+                        key,
+                        BackupCrypto.nonce(noncePrefix, chunkIndex),
+                        header,
+                        terminal,
+                        terminalPlaintext,
+                        terminalPlaintext.size,
+                    )
+                    try {
+                        limitedOutput.write(terminal)
+                        limitedOutput.write(authenticatedTerminal)
+                        limitedOutput.flush()
+                    } finally {
+                        authenticatedTerminal.fill(0)
+                    }
                 } finally {
-                    authenticationTag.fill(0)
+                    terminalPlaintext.fill(0)
                 }
             } finally {
                 plaintext.fill(0)
@@ -290,10 +298,14 @@ internal object BackupContainer {
                         RECORD_DATA -> {
                             if (expectedIndex >= limits.maxDataChunks ||
                                 record.plaintextBytes !in 1..header.chunkBytes ||
-                                record.ciphertextBytes != record.plaintextBytes + BACKUP_GCM_TAG_BYTES ||
                                 record.plaintextBytes > limits.maxPlaintextBytes - totalPlaintext
                             ) {
                                 throw BackupContainerException(BackupContainerFailure.RESOURCE_LIMIT)
+                            }
+                            if (record.ciphertextBytes.toLong() !=
+                                record.plaintextBytes.toLong() + BACKUP_GCM_TAG_BYTES
+                            ) {
+                                authenticationFailure()
                             }
                             val ciphertext = readExactly(
                                 input,
@@ -320,20 +332,23 @@ internal object BackupContainer {
                         }
 
                         RECORD_END -> {
-                            if (record.plaintextBytes != 0 || record.ciphertextBytes != BACKUP_GCM_TAG_BYTES) {
+                            if (record.plaintextBytes != TERMINAL_PLAINTEXT_BYTES ||
+                                record.ciphertextBytes.toLong() !=
+                                TERMINAL_PLAINTEXT_BYTES.toLong() + BACKUP_GCM_TAG_BYTES
+                            ) {
                                 authenticationFailure()
                             }
-                            val tag = readExactly(
+                            val authenticatedTerminal = readExactly(
                                 input,
                                 record.ciphertextBytes,
                                 BackupContainerFailure.AUTHENTICATION_FAILED,
                             )
-                            val terminalPlaintext = decryptRecord(key, header, recordBytes, tag)
+                            val terminalPlaintext = decryptRecord(key, header, recordBytes, authenticatedTerminal)
                             try {
-                                if (terminalPlaintext.isNotEmpty()) authenticationFailure()
+                                validateTerminalPlaintext(terminalPlaintext, totalPlaintext, expectedIndex)
                             } finally {
                                 terminalPlaintext.fill(0)
-                                tag.fill(0)
+                                authenticatedTerminal.fill(0)
                             }
                             cancellationCheck()
                             if (input.read() != -1) authenticationFailure()
@@ -435,6 +450,21 @@ internal object BackupContainer {
             .putInt(ciphertextBytes)
             .array()
 
+    private fun encodeTerminalPlaintext(totalPlaintext: Long, dataChunks: Int): ByteArray =
+        ByteBuffer.allocate(TERMINAL_PLAINTEXT_BYTES)
+            .order(ByteOrder.BIG_ENDIAN)
+            .putLong(totalPlaintext)
+            .putInt(dataChunks)
+            .array()
+
+    private fun validateTerminalPlaintext(encoded: ByteArray, totalPlaintext: Long, dataChunks: Int) {
+        if (encoded.size != TERMINAL_PLAINTEXT_BYTES) authenticationFailure()
+        val input = ByteBuffer.wrap(encoded).order(ByteOrder.BIG_ENDIAN)
+        if (input.long != totalPlaintext || input.int != dataChunks || input.hasRemaining()) {
+            authenticationFailure()
+        }
+    }
+
     private fun decodeRecord(encoded: ByteArray): DecodedRecord {
         if (encoded.size != RECORD_HEADER_BYTES) authenticationFailure()
         val input = ByteBuffer.wrap(encoded).order(ByteOrder.BIG_ENDIAN)
@@ -492,7 +522,8 @@ internal object BackupContainer {
     }
 
     private fun validatePolicy(limits: BackupContainerLimits) {
-        if (limits.maxContainerBytes < HEADER_BYTES + RECORD_HEADER_BYTES + BACKUP_GCM_TAG_BYTES ||
+        if (limits.maxContainerBytes <
+            HEADER_BYTES + RECORD_HEADER_BYTES + TERMINAL_PLAINTEXT_BYTES + BACKUP_GCM_TAG_BYTES ||
             limits.maxContainerBytes > MAX_BACKUP_CONTAINER_BYTES || limits.maxPlaintextBytes < 0 ||
             limits.maxPlaintextBytes > MAX_BACKUP_CONTAINER_PLAINTEXT_BYTES || limits.minChunkBytes <= 0 ||
             limits.maxChunkBytes < limits.minChunkBytes || limits.maxChunkBytes > MAX_BACKUP_CONTAINER_CHUNK_BYTES ||

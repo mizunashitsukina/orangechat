@@ -6,8 +6,9 @@
 
 package me.rerere.rikkahub.ui.pages.backup
 
+import android.app.Application
 import android.util.Log
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,15 +18,19 @@ import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.repository.ConversationRepository
-import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
+import me.rerere.rikkahub.data.sync.LocalBackupService
+import me.rerere.rikkahub.data.sync.PreparedLocalBackup
 import me.rerere.rikkahub.data.sync.S3BackupItem
 import me.rerere.rikkahub.data.sync.S3Sync
+import me.rerere.rikkahub.data.sync.StagedLocalBackup
 import me.rerere.rikkahub.data.sync.importer.ChatboxImporter
 import me.rerere.rikkahub.data.sync.importer.CherryStudioProviderImporter
 import me.rerere.rikkahub.data.sync.webdav.WebDavBackupItem
 import me.rerere.rikkahub.data.sync.webdav.WebDavSync
 import me.rerere.rikkahub.utils.UiState
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 
 private const val TAG = "BackupVM"
 
@@ -34,7 +39,8 @@ class BackupVM(
     private val webDavSync: WebDavSync,
     private val s3Sync: S3Sync,
     private val conversationRepository: ConversationRepository,
-) : ViewModel() {
+    application: Application,
+) : AndroidViewModel(application) {
     val settings = settingsStore.settingsFlow.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
@@ -43,6 +49,12 @@ class BackupVM(
 
     val webDavBackupItems = MutableStateFlow<UiState<List<WebDavBackupItem>>>(UiState.Idle)
     val s3BackupItems = MutableStateFlow<UiState<List<S3BackupItem>>>(UiState.Idle)
+    private val localBackupService = LocalBackupService(
+        cacheDirectory = application.cacheDir,
+        createArchive = { webDavSync.prepareBackupFile(settings.value.webDavConfig.copy()) },
+        restoreArchive = { webDavSync.restoreFromLocalFile(it, settings.value.webDavConfig) },
+        recordBackupTime = { recordBackupTime() },
+    )
 
     init {
         loadBackupFileItems()
@@ -92,16 +104,23 @@ class BackupVM(
         webDavSync.deleteBackupFile(settings.value.webDavConfig, item)
     }
 
-    suspend fun exportToFile(): File {
-        return BackupArchiveSecurity.transferTemporaryFileOwnership(
-            prepare = { webDavSync.prepareBackupFile(settings.value.webDavConfig.copy()) },
-            beforeTransfer = { recordBackupTime() },
-        )
-    }
+    internal suspend fun prepareEncryptedLocalBackup(password: CharArray): PreparedLocalBackup =
+        localBackupService.prepareEncryptedExport(password)
 
-    suspend fun restoreFromLocalFile(file: File) {
-        webDavSync.restoreFromLocalFile(file, settings.value.webDavConfig)
-    }
+    internal suspend fun stageLocalBackup(openInput: () -> InputStream): StagedLocalBackup =
+        localBackupService.stageImport(openInput)
+
+    internal suspend fun restoreLocalBackup(
+        staged: StagedLocalBackup,
+        password: CharArray? = null,
+        legacyConfirmed: Boolean = false,
+    ) = localBackupService.restore(staged, password, legacyConfirmed)
+
+    internal suspend fun copyLocalBackupToDestination(
+        prepared: PreparedLocalBackup,
+        openDestination: () -> OutputStream,
+        deleteIncompleteDestination: () -> Unit,
+    ) = localBackupService.copyToDestination(prepared, openDestination, deleteIncompleteDestination)
 
     suspend fun restoreFromChatBox(file: File): ChatboxRestoreResult {
         val payload = ChatboxImporter.import(
