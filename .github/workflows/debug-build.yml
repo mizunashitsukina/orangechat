@@ -142,11 +142,49 @@ jobs:
               -validity 10000
           fi
 
+      - name: Locate Android SDK command-line tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$sdk_root" ]]; then
+            echo "Neither ANDROID_SDK_ROOT nor ANDROID_HOME is set." >&2
+            exit 1
+          fi
+
+          sdkmanager_path="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager_path" ]]; then
+            echo "Android SDK command-line tools are unavailable at the expected latest path." >&2
+            if [[ -d "$sdk_root/cmdline-tools" ]]; then
+              find "$sdk_root/cmdline-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort >&2
+            else
+              echo "The Android SDK cmdline-tools directory does not exist." >&2
+            fi
+            exit 1
+          fi
+
+          printf '%s\n' "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          printf '%s\n' "$sdk_root/platform-tools" >> "$GITHUB_PATH"
+          printf '%s\n' "$sdk_root/emulator" >> "$GITHUB_PATH"
+          printf 'ANDROID_SDK_ROOT_RESOLVED=%s\n' "$sdk_root" >> "$GITHUB_ENV"
+          "$sdkmanager_path" --version
+
       - name: Install official Android API 26 emulator image
         shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
+          set -euo pipefail
+          sdkmanager_path="$ANDROID_SDK_ROOT_RESOLVED/cmdline-tools/latest/bin/sdkmanager"
+          set +e
+          set +o pipefail
+          yes | "$sdkmanager_path" --licenses >/dev/null
+          license_status=$?
+          set -e
+          set -o pipefail
+          if [[ $license_status -ne 0 ]]; then
+            echo "Android SDK license acceptance failed." >&2
+            exit "$license_status"
+          fi
+          "$sdkmanager_path" \
             "platform-tools" \
             "emulator" \
             "platforms;android-26" \
