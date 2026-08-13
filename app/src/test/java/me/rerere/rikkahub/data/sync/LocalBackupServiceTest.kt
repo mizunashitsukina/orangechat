@@ -55,10 +55,11 @@ class LocalBackupServiceTest {
         prepared.close()
         val importer = service(root, restoreArchive = { archive ->
             val staging = root.resolve("restore-staging")
-            val staged = BackupArchiveSecurity.stageAndPreflight(
+            val staged = BackupArchiveSecurity.stageAndPreflight<String, Unit>(
                 archive = archive,
                 stagingRoot = staging,
                 decodeSettings = { it },
+                decodePluginSettings = {},
             )
             assertEquals("{}", staged.settings)
             staging.deleteRecursively()
