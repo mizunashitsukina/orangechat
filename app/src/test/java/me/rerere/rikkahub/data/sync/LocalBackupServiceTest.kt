@@ -263,6 +263,7 @@ class LocalBackupServiceTest {
     fun cancellationPropagatesAndCleansEncryptedImportOutput() = withTempDir { root ->
         val cancellation = CancellationException("test-cancellation")
         var restored = false
+        lateinit var decryptedOutput: File
         val service = service(
             root = root,
             restoreArchive = { restored = true },
@@ -280,23 +281,30 @@ class LocalBackupServiceTest {
                     password: CharArray,
                     cancellationCheck: () -> Unit,
                 ) {
+                    decryptedOutput = destination
                     destination.writeText("unverified-plaintext-marker")
                     throw cancellation
                 }
             },
         )
         val staged = runBlocking { service.stageImport { ByteArrayInputStream(OCBK_MAGIC + byteArrayOf(1)) } }
+        val stagedInput = staged.file
+        val suppliedPassword = PASSWORD.copyOf()
 
-        val thrown = try {
-            runBlocking { service.restore(staged, PASSWORD.copyOf()) }
-            fail("Expected cancellation")
-            null
-        } catch (e: CancellationException) {
-            e
+        runBlocking {
+            try {
+                service.restore(staged, suppliedPassword)
+                fail("Expected cancellation")
+            } catch (e: CancellationException) {
+                assertSame(cancellation, e)
+            }
         }
 
-        assertSame(cancellation, thrown)
         assertFalse(restored)
+        assertFalse(decryptedOutput.exists())
+        assertFalse(stagedInput.exists())
+        assertTrue(suppliedPassword.all { it == '\u0000' })
+        runBlocking { service.stageImport { ByteArrayInputStream(legacyBytes(root)) } }.close()
         assertNoLocalTemporaryFiles(root)
     }
 
