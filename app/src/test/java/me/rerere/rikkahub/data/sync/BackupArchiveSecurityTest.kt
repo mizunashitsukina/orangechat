@@ -853,7 +853,7 @@ class BackupArchiveSecurityTest {
               "position": "after_system_prompt",
               "content": "safe-mode-prompt",
               "injectDepth": 4,
-              "role": "USER"
+              "role": "user"
             }
           ],
           "lorebooks": [],
