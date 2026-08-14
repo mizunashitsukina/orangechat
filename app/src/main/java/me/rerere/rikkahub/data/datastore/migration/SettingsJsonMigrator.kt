@@ -8,13 +8,17 @@ package me.rerere.rikkahub.data.datastore.migration
 
 import android.util.Log
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.rikkahub.utils.JsonInstant
+import kotlin.uuid.Uuid
 
 private const val TAG = "SettingsJsonMigrator"
 
@@ -50,6 +54,8 @@ object SettingsJsonMigrator {
                     !(legacyJwtEnabled && legacyPassword.isNotBlank())
                 )
             }
+
+            migrateNullableModelIds(root)
 
             // V1: 修复 mcpServers 中全限定类名的 type 字段
             root["mcpServers"]?.let { element ->
@@ -91,5 +97,45 @@ object SettingsJsonMigrator {
         }.onFailure {
             Log.e(TAG, "Settings JSON migration failed: ${it.javaClass.simpleName}")
         }.getOrDefault(settingsJson)
+    }
+
+    private fun migrateNullableModelIds(root: MutableMap<String, JsonElement>) {
+        val availableModelIds = root["providers"]
+            ?.let { providers -> collectModelIds(providers) }
+            .orEmpty()
+        val fallback = sequenceOf("fastModelId", "chatModelId")
+            .mapNotNull { field -> root[field].validModelId(availableModelIds) }
+            .firstOrNull()
+
+        listOf("titleModelId", "suggestionModelId").forEach { field ->
+            if (root[field] is JsonNull && fallback != null) {
+                root[field] = fallback
+            }
+        }
+    }
+
+    private fun collectModelIds(providers: JsonElement): Set<Uuid> {
+        val providerArray = runCatching { providers.jsonArray }.getOrNull() ?: return emptySet()
+        return providerArray.flatMap { provider ->
+            val models = runCatching { provider.jsonObject["models"]?.jsonArray }.getOrNull()
+                ?: JsonArray(emptyList())
+            models.mapNotNull { model ->
+                runCatching { model.jsonObject["id"] }.getOrNull().parseUuidOrNull()
+            }
+        }.toSet()
+    }
+
+    private fun JsonElement?.validModelId(availableModelIds: Set<Uuid>): JsonPrimitive? {
+        val primitive = this as? JsonPrimitive ?: return null
+        val id = primitive.parseUuidOrNull() ?: return null
+        return primitive.takeIf { id in availableModelIds }
+    }
+
+    private fun JsonElement?.parseUuidOrNull(): Uuid? {
+        val value = (this as? JsonPrimitive)
+            ?.takeIf { it.isString }
+            ?.contentOrNull
+            ?: return null
+        return runCatching { Uuid.parse(value) }.getOrNull()
     }
 }

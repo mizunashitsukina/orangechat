@@ -6,7 +6,10 @@
 
 package me.rerere.rikkahub.data.sync
 
+import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigrator
 import me.rerere.rikkahub.data.files.SkillPaths
+import me.rerere.rikkahub.utils.JsonInstant
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,6 +44,71 @@ class BackupArchiveSecurityTest {
         assertEquals("legacy-settings", result.settings)
         assertTrue(staging.resolve("uploads/photo.jpg").isFile)
         staging.deleteRecursively()
+    }
+
+    @Test
+    fun rikkahub248StyleArchivePassesPreflightWithFontsAsSafeUnknownData() = withTempDir { root ->
+        val archive = zip(root, mapOf(
+            "settings.json" to rikkahubSettingsJson(),
+            "rikka_hub.db" to "database",
+            "rikka_hub-wal" to "wal",
+            "rikka_hub-shm" to "shm",
+            "upload/attachment.bin" to "upload",
+            "skills/example/SKILL.md" to "skill",
+            "fonts/custom-font.ttf" to "font",
+        ))
+        val staging = root.resolve("staging")
+        val applicationRoot = root.resolve("application")
+
+        val result = BackupArchiveSecurity.stageAndPreflight<Settings, String>(
+            archive = archive,
+            stagingRoot = staging,
+            limits = limits(),
+            decodeSettings = { source ->
+                JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
+            },
+            decodePluginSettings = { it },
+            restoreTargets = restoreTargets(root),
+        )
+
+        assertEquals(RIKKAHUB_FAST_MODEL_ID, result.settings.titleModelId.toString())
+        assertEquals(RIKKAHUB_FAST_MODEL_ID, result.settings.suggestionModelId.toString())
+        assertTrue(staging.resolve("fonts/custom-font.ttf").isFile)
+        assertFalse(applicationRoot.resolve("fonts/custom-font.ttf").exists())
+        assertEquals(7, result.entryCount)
+        result.root.deleteRecursively()
+    }
+
+    @Test
+    fun unknownProviderTypeFailsBeforeAnyRestoreTargetWrite() = withTempDir { root ->
+        val providerType = "future-provider-marker"
+        val archive = zip(root, mapOf(
+            "settings.json" to rikkahubSettingsJson(providerType),
+            "upload/attachment.bin" to "upload",
+        ))
+        val staging = root.resolve("staging")
+        val applicationRoot = root.resolve("application")
+        val failure = try {
+            BackupArchiveSecurity.stageAndPreflight<Settings, String>(
+                archive = archive,
+                stagingRoot = staging,
+                limits = limits(),
+                decodeSettings = { source ->
+                    JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
+                },
+                decodePluginSettings = { it },
+                restoreTargets = restoreTargets(root),
+            )
+            fail("Expected unknown provider type to be rejected")
+            null
+        } catch (e: BackupArchiveException) {
+            e
+        }
+
+        assertEquals(BackupArchiveFailure.INVALID_SETTINGS, failure!!.reason)
+        assertFalse(failure.message.orEmpty().contains(providerType))
+        assertFalse(staging.exists())
+        assertFalse(applicationRoot.resolve("upload/attachment.bin").exists())
     }
 
     @Test fun forwardSlashTraversalIsRejected() = assertUnsafe("../escape")
@@ -661,6 +729,25 @@ class BackupArchiveSecurityTest {
         return archive
     }
 
+    private fun rikkahubSettingsJson(providerType: String = "openai"): String = """
+        {
+          "chatModelId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "fastModelId": "$RIKKAHUB_FAST_MODEL_ID",
+          "titleModelId": null,
+          "suggestionModelId": null,
+          "providers": [
+            {
+              "type": "$providerType",
+              "id": "$RIKKAHUB_PROVIDER_ID",
+              "models": [
+                {"id": "$RIKKAHUB_FAST_MODEL_ID", "modelId": "fast"},
+                {"id": "$RIKKAHUB_CHAT_MODEL_ID", "modelId": "chat"}
+              ]
+            }
+          ]
+        }
+    """.trimIndent()
+
     private fun replaceAll(bytes: ByteArray, from: ByteArray, to: ByteArray) {
         require(from.size == to.size)
         for (start in 0..bytes.size - from.size) {
@@ -692,5 +779,11 @@ class BackupArchiveSecurityTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    private companion object {
+        const val RIKKAHUB_PROVIDER_ID = "50000000-0000-4000-8000-000000000005"
+        const val RIKKAHUB_FAST_MODEL_ID = "60000000-0000-4000-8000-000000000006"
+        const val RIKKAHUB_CHAT_MODEL_ID = "70000000-0000-4000-8000-000000000007"
     }
 }

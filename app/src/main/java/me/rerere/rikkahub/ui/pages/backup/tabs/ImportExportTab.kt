@@ -49,6 +49,7 @@ import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.sync.BACKUP_CONTAINER_EXTENSION
+import me.rerere.rikkahub.data.sync.BackupArchiveException
 import me.rerere.rikkahub.data.sync.BackupArchiveFailure
 import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
 import me.rerere.rikkahub.data.sync.BackupContainerException
@@ -170,6 +171,11 @@ fun ImportExportTab(
                     context.getString(R.string.backup_page_restore_failed_generic)
                 }
                 toaster.show(message, type = ToastType.Error)
+            } catch (e: BackupArchiveException) {
+                toaster.show(
+                    context.getString(backupArchiveFailureMessageRes(e.reason)),
+                    type = ToastType.Error,
+                )
             } catch (_: Exception) {
                 toaster.show(context.getString(R.string.backup_page_restore_failed_generic), type = ToastType.Error)
             } finally {
@@ -239,6 +245,13 @@ fun ImportExportTab(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: BackupArchiveException) {
+                stagedImport?.close()
+                stagedImport = null
+                toaster.show(
+                    context.getString(backupArchiveFailureMessageRes(e.reason)),
+                    type = ToastType.Error,
+                )
             } catch (_: Exception) {
                 stagedImport?.close()
                 stagedImport = null
@@ -453,6 +466,18 @@ fun ImportExportTab(
             }
         }
     }
+}
+
+internal fun backupArchiveFailureMessageRes(reason: BackupArchiveFailure): Int = when (reason) {
+    BackupArchiveFailure.INVALID_SETTINGS -> R.string.backup_page_settings_incompatible
+    BackupArchiveFailure.INVALID_ENTRY_PATH -> R.string.backup_page_unsafe_archive_path
+    BackupArchiveFailure.ARCHIVE_TOO_LARGE,
+    BackupArchiveFailure.TOO_MANY_ENTRIES,
+    BackupArchiveFailure.ENTRY_TOO_LARGE,
+    BackupArchiveFailure.TOTAL_TOO_LARGE,
+    BackupArchiveFailure.SETTINGS_TOO_LARGE,
+    BackupArchiveFailure.PLUGIN_SETTINGS_TOO_LARGE -> R.string.backup_page_archive_limits_exceeded
+    else -> R.string.backup_page_restore_failed_generic
 }
 
 @Composable

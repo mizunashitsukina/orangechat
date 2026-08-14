@@ -189,6 +189,9 @@
   <string name="backup_page_encrypted_import_prompt">请输入导出此备份时使用的密码。</string>
   <string name="backup_page_encrypted_auth_failed">密码错误或备份文件已损坏</string>
   <string name="backup_page_restore_failed_generic">无法安全恢复备份</string>
+  <string name="backup_page_settings_incompatible">备份设置与当前版本不兼容</string>
+  <string name="backup_page_unsafe_archive_path">备份包含不安全的文件路径</string>
+  <string name="backup_page_archive_limits_exceeded">备份超出安全导入限制</string>
   <string name="backup_page_backup_password">备份密码</string>
   <string name="backup_page_confirm_backup_password">确认备份密码</string>
   <string name="backup_page_password_empty">请输入备份密码</string>
