@@ -59,7 +59,7 @@ class Migration_25_26_Test {
             execSQL(
                 "INSERT INTO conversation_folder " +
                     "(id, assistant_id, name, sort_index, create_at) VALUES (?, ?, ?, ?, ?)",
-                arrayOf("folder-existing", "assistant-existing", "Existing folder", 7, 1234L)
+                arrayOf<Any?>("folder-existing", "assistant-existing", "Existing folder", 7, 1234L)
             )
             insertConversationAndMessage(
                 "conversation-rikkahub",
@@ -159,7 +159,7 @@ class Migration_25_26_Test {
                 "INSERT INTO conversationentity " +
                     "(id, assistant_id, title, nodes, create_at, update_at) " +
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                arrayOf(conversationId, "assistant-test", "Test conversation", "[]", 100L, 200L)
+                arrayOf<Any?>(conversationId, "assistant-test", "Test conversation", "[]", 100L, 200L)
             )
         } else {
             execSQL(
@@ -180,7 +180,7 @@ class Migration_25_26_Test {
         execSQL(
             "INSERT INTO message_node " +
                 "(id, conversation_id, node_index, messages, select_index) VALUES (?, ?, ?, ?, ?)",
-            arrayOf(messageId, conversationId, 0, "[]", 0)
+            arrayOf<Any?>(messageId, conversationId, 0, "[]", 0)
         )
     }
 
