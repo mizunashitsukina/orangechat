@@ -33,8 +33,6 @@ object Migration_25_26 : Migration(25, 26) {
     }
 
     private fun migrateRikkaHub248(db: SupportSQLiteDatabase) {
-        validateConversationFolderObjects(db)
-        validateMessageNodeTable(db)
         check(!tableExists(db, LEGACY_METADATA_TABLE)) {
             "Legacy conversation compatibility storage already exists"
         }
@@ -158,9 +156,20 @@ object Migration_25_26 : Migration(25, 26) {
         val columns = readColumns(db, "conversationentity")
         return when {
             columns.matches(ORANGECHAT_V25_COLUMNS) -> SourceSchema.ORANGECHAT_V25
-            columns.matches(RIKKAHUB_248_COLUMNS) -> SourceSchema.RIKKAHUB_248
+            columns.matches(RIKKAHUB_248_COLUMNS) -> {
+                requireRikkaHub248SourceSchema(db)
+                SourceSchema.RIKKAHUB_248
+            }
             else -> throw IllegalStateException("Unsupported conversation schema for migration to v26")
         }
+    }
+
+    internal fun requireRikkaHub248SourceSchema(db: SupportSQLiteDatabase) {
+        check(readColumns(db, "conversationentity").matches(RIKKAHUB_248_COLUMNS)) {
+            "RikkaHub conversation schema is incompatible"
+        }
+        validateConversationFolderObjects(db)
+        validateMessageNodeTable(db)
     }
 
     private fun validateConversationFolderObjects(db: SupportSQLiteDatabase) {

@@ -221,7 +221,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run backup crypto compatibility test on API 26
+      - name: Run API 26 compatibility and database migration tests
         shell: bash
         run: |
           set -euo pipefail
@@ -284,5 +284,8 @@ jobs:
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
 
+          test_classes="me.rerere.rikkahub.data.sync.BackupContainerAndroidCompatibilityTest"
+          test_classes+=",me.rerere.rikkahub.data.db.migrations.Migration_24_29_Test"
+          test_classes+=",me.rerere.rikkahub.data.db.migrations.Migration_25_26_Test"
           ./gradlew :app:connectedDebugAndroidTest \
-            -Pandroid.testInstrumentationRunnerArguments.class=me.rerere.rikkahub.data.sync.BackupContainerAndroidCompatibilityTest,me.rerere.rikkahub.data.db.migrations.Migration_25_26_Test
+            "-Pandroid.testInstrumentationRunnerArguments.class=$test_classes"
