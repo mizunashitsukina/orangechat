@@ -74,7 +74,9 @@ jobs:
             --tests "me.rerere.rikkahub.data.sync.BackupArchiveSecurityTest" \
             --tests "me.rerere.rikkahub.data.sync.AndroidSystemBackupRulesTest" \
             --tests "me.rerere.rikkahub.data.sync.BackupContainerTest" \
-            --tests "me.rerere.rikkahub.data.sync.LocalBackupServiceTest"
+            --tests "me.rerere.rikkahub.data.sync.LocalBackupServiceTest" \
+            --tests "me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigratorTest" \
+            --tests "me.rerere.rikkahub.ui.pages.backup.tabs.BackupImportErrorMappingTest"
 
       - name: Assemble Debug APK
         run: |
