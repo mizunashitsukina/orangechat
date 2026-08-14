@@ -49,16 +49,14 @@ import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.sync.BACKUP_CONTAINER_EXTENSION
-import me.rerere.rikkahub.data.sync.BackupArchiveException
 import me.rerere.rikkahub.data.sync.BackupArchiveFailure
 import me.rerere.rikkahub.data.sync.BackupArchiveSecurity
-import me.rerere.rikkahub.data.sync.BackupContainerException
-import me.rerere.rikkahub.data.sync.BackupContainerFailure
 import me.rerere.rikkahub.data.sync.LocalBackupFormat
 import me.rerere.rikkahub.data.sync.LocalBackupPasswordFailure
 import me.rerere.rikkahub.data.sync.MAX_THIRD_PARTY_IMPORT_BYTES
 import me.rerere.rikkahub.data.sync.PreparedLocalBackup
 import me.rerere.rikkahub.data.sync.StagedLocalBackup
+import me.rerere.rikkahub.data.sync.backupRestoreDiagnosticCode
 import me.rerere.rikkahub.data.sync.validateLocalBackupExportPassword
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.StickyHeader
@@ -103,6 +101,14 @@ fun ImportExportTab(
         dialog = null
         clearPasswordState()
         isRestoring = false
+    }
+
+    fun showSafeRestoreDiagnostic(error: Throwable) {
+        val code = backupRestoreDiagnosticCode(error).value
+        toaster.show(
+            context.getString(R.string.backup_page_restore_failed_diagnostic, code),
+            type = ToastType.Error,
+        )
     }
 
     DisposableEffect(Unit) {
@@ -162,22 +168,8 @@ fun ImportExportTab(
                 onShowRestartDialog()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: BackupContainerException) {
-                val message = if (e.reason == BackupContainerFailure.AUTHENTICATION_FAILED ||
-                    e.reason == BackupContainerFailure.INVALID_FORMAT
-                ) {
-                    context.getString(R.string.backup_page_encrypted_auth_failed)
-                } else {
-                    context.getString(R.string.backup_page_restore_failed_generic)
-                }
-                toaster.show(message, type = ToastType.Error)
-            } catch (e: BackupArchiveException) {
-                toaster.show(
-                    context.getString(backupArchiveFailureMessageRes(e.reason)),
-                    type = ToastType.Error,
-                )
-            } catch (_: Exception) {
-                toaster.show(context.getString(R.string.backup_page_restore_failed_generic), type = ToastType.Error)
+            } catch (e: Exception) {
+                showSafeRestoreDiagnostic(e)
             } finally {
                 passwordChars?.fill('\u0000')
                 stagedImport = null
@@ -245,17 +237,14 @@ fun ImportExportTab(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: BackupArchiveException) {
+            } catch (e: Exception) {
                 stagedImport?.close()
                 stagedImport = null
-                toaster.show(
-                    context.getString(backupArchiveFailureMessageRes(e.reason)),
-                    type = ToastType.Error,
-                )
-            } catch (_: Exception) {
-                stagedImport?.close()
-                stagedImport = null
-                toaster.show(context.getString(R.string.backup_page_restore_failed_generic), type = ToastType.Error)
+                if (importType == "local") {
+                    showSafeRestoreDiagnostic(e)
+                } else {
+                    toaster.show(context.getString(R.string.backup_page_restore_failed_generic), type = ToastType.Error)
+                }
             } finally {
                 tempFile?.delete()
                 if (dialog == null) isRestoring = false
@@ -466,18 +455,6 @@ fun ImportExportTab(
             }
         }
     }
-}
-
-internal fun backupArchiveFailureMessageRes(reason: BackupArchiveFailure): Int = when (reason) {
-    BackupArchiveFailure.INVALID_SETTINGS -> R.string.backup_page_settings_incompatible
-    BackupArchiveFailure.INVALID_ENTRY_PATH -> R.string.backup_page_unsafe_archive_path
-    BackupArchiveFailure.ARCHIVE_TOO_LARGE,
-    BackupArchiveFailure.TOO_MANY_ENTRIES,
-    BackupArchiveFailure.ENTRY_TOO_LARGE,
-    BackupArchiveFailure.TOTAL_TOO_LARGE,
-    BackupArchiveFailure.SETTINGS_TOO_LARGE,
-    BackupArchiveFailure.PLUGIN_SETTINGS_TOO_LARGE -> R.string.backup_page_archive_limits_exceeded
-    else -> R.string.backup_page_restore_failed_generic
 }
 
 @Composable

@@ -47,7 +47,7 @@ class BackupArchiveSecurityTest {
     }
 
     @Test
-    fun rikkahub248StyleArchivePassesPreflightWithFontsAsSafeUnknownData() = withTempDir { root ->
+    fun rikkahub248FullAppDataArchiveReachesRestoreReadyStage() = withTempDir { root ->
         val archive = zip(root, mapOf(
             "settings.json" to rikkahubSettingsJson(),
             "rikka_hub.db" to "database",
@@ -729,12 +729,38 @@ class BackupArchiveSecurityTest {
         return archive
     }
 
+    // Mirrors the public RikkaHub 2.4.8 Settings shape with all credential-bearing values intentionally empty.
     private fun rikkahubSettingsJson(providerType: String = "openai"): String = """
         {
+          "dynamicColor": true,
+          "themeId": "default",
+          "customThemes": [],
+          "developerMode": false,
+          "displaySetting": {
+            "bubbleOpacity": 1.0,
+            "showDateTimeInMessage": false,
+            "updateCheckDisabledUntilEpochMillis": 0,
+            "ttsOnlyReadOutsideBrackets": false,
+            "chatCustomFontPath": "",
+            "chatCustomFontName": ""
+          },
+          "favoriteModels": [],
           "chatModelId": "$RIKKAHUB_CHAT_MODEL_ID",
           "fastModelId": "$RIKKAHUB_FAST_MODEL_ID",
           "titleModelId": null,
+          "imageGenerationModelId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "titlePrompt": "safe-title-prompt",
+          "translateModeId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "translatePrompt": "safe-translate-prompt",
+          "translateThinkingBudget": 0,
+          "enableSuggestion": true,
           "suggestionModelId": null,
+          "suggestionPrompt": "safe-suggestion-prompt",
+          "ocrModelId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "ocrPrompt": "safe-ocr-prompt",
+          "compressModelId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "compressPrompt": "safe-compress-prompt",
+          "assistantId": "$RIKKAHUB_PROVIDER_ID",
           "providers": [
             {
               "type": "$providerType",
@@ -744,7 +770,49 @@ class BackupArchiveSecurityTest {
                 {"id": "$RIKKAHUB_CHAT_MODEL_ID", "modelId": "chat"}
               ]
             }
-          ]
+          ],
+          "assistants": [],
+          "assistantTags": [],
+          "searchServices": [],
+          "searchCommonOptions": {},
+          "searchServiceSelected": 0,
+          "mcpServers": [],
+          "webDavConfig": {
+            "url": "",
+            "username": "",
+            "password": "",
+            "path": "rikkahub_backups",
+            "items": ["DATABASE", "FILES"]
+          },
+          "s3Config": {
+            "endpoint": "",
+            "accessKeyId": "",
+            "secretAccessKey": "",
+            "bucket": "",
+            "region": "auto",
+            "pathStyle": true,
+            "items": ["DATABASE", "FILES"]
+          },
+          "ttsProviders": [],
+          "selectedTTSProviderId": "$RIKKAHUB_PROVIDER_ID",
+          "defaultTTSPlaybackSpeed": 1.0,
+          "asrProviders": [],
+          "selectedASRProviderId": null,
+          "modeInjections": [],
+          "lorebooks": [],
+          "quickMessages": [],
+          "webServerEnabled": false,
+          "webServerPort": 8080,
+          "webServerJwtEnabled": false,
+          "webServerAccessPassword": "",
+          "webServerLocalhostOnly": false,
+          "backupReminderConfig": {
+            "enabled": false,
+            "intervalDays": 7,
+            "lastBackupTime": 0
+          },
+          "launchCount": 0,
+          "sponsorAlertDismissedAt": 0
         }
     """.trimIndent()
 
