@@ -63,7 +63,7 @@ class BackupArchiveSecurityTest {
         val result = BackupArchiveSecurity.stageAndPreflight<Settings, String>(
             archive = archive,
             stagingRoot = staging,
-            limits = limits(),
+            limits = rikkahubFixtureLimits(),
             decodeSettings = { source ->
                 JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
             },
@@ -92,7 +92,7 @@ class BackupArchiveSecurityTest {
             BackupArchiveSecurity.stageAndPreflight<Settings, String>(
                 archive = archive,
                 stagingRoot = staging,
-                limits = limits(),
+                limits = rikkahubFixtureLimits(),
                 decodeSettings = { source ->
                     JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
                 },
@@ -838,6 +838,11 @@ class BackupArchiveSecurityTest {
         maxTotalExtractedBytes = maxTotalExtractedBytes,
         maxSettingsJsonBytes = maxSettingsJsonBytes,
         maxPluginSettingsJsonBytes = maxPluginSettingsJsonBytes,
+    )
+
+    private fun rikkahubFixtureLimits() = limits(
+        maxTotalExtractedBytes = 8192,
+        maxSettingsJsonBytes = 4096,
     )
 
     private fun withTempDir(block: (File) -> Unit) {
