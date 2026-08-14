@@ -7,6 +7,7 @@
 package me.rerere.rikkahub.data.sync
 
 import java.util.concurrent.CancellationException
+import me.rerere.rikkahub.data.datastore.migration.BackupSettingsCompatibilityException
 
 /** Stable, privacy-safe identifiers for the failure categories already exposed by the restore pipeline. */
 internal enum class BackupRestoreDiagnosticCode(val value: String) {
@@ -90,4 +91,13 @@ internal fun backupRestoreDiagnosticCode(error: Throwable): BackupRestoreDiagnos
 
         else -> BackupRestoreDiagnosticCode.UNKNOWN_FAILURE
     }
+}
+
+internal fun backupRestoreDiagnosticValue(error: Throwable): String {
+    val base = backupRestoreDiagnosticCode(error)
+    if (error is BackupArchiveException && error.reason == BackupArchiveFailure.INVALID_SETTINGS) {
+        val compatibility = error.cause as? BackupSettingsCompatibilityException
+        return compatibility?.section?.diagnosticCode ?: base.value
+    }
+    return base.value
 }

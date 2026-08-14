@@ -7,6 +7,9 @@
 package me.rerere.rikkahub.data.datastore.migration
 
 import android.util.Log
+import java.util.concurrent.CancellationException
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -14,13 +17,49 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.provider.ProviderSetting
+import me.rerere.asr.ASRProviderSetting
+import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
+import me.rerere.rikkahub.data.datastore.BackupReminderConfig
+import me.rerere.rikkahub.data.datastore.DisplaySetting
+import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.WebDavConfig
+import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.Lorebook
+import me.rerere.rikkahub.data.model.PromptInjection
+import me.rerere.rikkahub.data.model.QuickMessage
+import me.rerere.rikkahub.data.model.Tag
+import me.rerere.rikkahub.data.sync.s3.S3Config
+import me.rerere.rikkahub.ui.theme.CustomTheme
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.search.SearchCommonOptions
+import me.rerere.search.SearchServiceOptions
+import me.rerere.tts.provider.TTSProviderSetting
 import kotlin.uuid.Uuid
 
 private const val TAG = "SettingsJsonMigrator"
+
+internal enum class BackupSettingsSchemaSection(val diagnosticCode: String) {
+    CORE("BR-30-C"),
+    DISPLAY("BR-30-D"),
+    PROVIDERS("BR-30-P"),
+    ASSISTANTS("BR-30-A"),
+    MCP("BR-30-M"),
+    SEARCH("BR-30-S"),
+    TTS("BR-30-T"),
+    ASR("BR-30-R"),
+    PROMPTS("BR-30-I"),
+    BACKUP("BR-30-B"),
+}
+
+internal class BackupSettingsCompatibilityException(
+    val section: BackupSettingsSchemaSection,
+    cause: Throwable,
+) : Exception("Backup settings are incompatible", cause)
 
 /**
  * 对备份文件中的 settings.json 应用与 DataStore migration 相同的迁移逻辑。
@@ -30,6 +69,18 @@ private const val TAG = "SettingsJsonMigrator"
  * 此工具类负责在反序列化前对旧格式的 JSON 执行等价的迁移操作。
  */
 object SettingsJsonMigrator {
+
+    /** Decodes an imported Settings document while retaining only a fixed, privacy-safe failure section. */
+    internal fun decodeBackupSettings(settingsJson: String, json: Json = JsonInstant): Settings {
+        val migrated = migrate(settingsJson)
+        return try {
+            json.decodeFromString<Settings>(migrated)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw BackupSettingsCompatibilityException(classifyFailureSection(migrated, json), e)
+        }
+    }
 
     /**
      * 对 settings JSON 字符串依次应用所有版本的迁移。
@@ -137,5 +188,66 @@ object SettingsJsonMigrator {
             ?.contentOrNull
             ?: return null
         return runCatching { Uuid.parse(value) }.getOrNull()
+    }
+
+    private fun classifyFailureSection(settingsJson: String, json: Json): BackupSettingsSchemaSection {
+        val root = try {
+            json.parseToJsonElement(settingsJson).jsonObject
+        } catch (_: Exception) {
+            return BackupSettingsSchemaSection.CORE
+        }
+
+        if (root.hasInvalid<List<CustomTheme>>(json, "customThemes") ||
+            root.hasInvalid<DisplaySetting>(json, "displaySetting")
+        ) {
+            return BackupSettingsSchemaSection.DISPLAY
+        }
+        if (root.hasInvalid<List<ProviderSetting>>(json, "providers")) {
+            return BackupSettingsSchemaSection.PROVIDERS
+        }
+        if (root.hasInvalid<List<Assistant>>(json, "assistants") ||
+            root.hasInvalid<List<Tag>>(json, "assistantTags")
+        ) {
+            return BackupSettingsSchemaSection.ASSISTANTS
+        }
+        if (root.hasInvalid<List<McpServerConfig>>(json, "mcpServers")) {
+            return BackupSettingsSchemaSection.MCP
+        }
+        if (root.hasInvalid<List<SearchServiceOptions>>(json, "searchServices") ||
+            root.hasInvalid<SearchCommonOptions>(json, "searchCommonOptions")
+        ) {
+            return BackupSettingsSchemaSection.SEARCH
+        }
+        if (root.hasInvalid<List<TTSProviderSetting>>(json, "ttsProviders")) {
+            return BackupSettingsSchemaSection.TTS
+        }
+        if (root.hasInvalid<List<ASRProviderSetting>>(json, "asrProviders")) {
+            return BackupSettingsSchemaSection.ASR
+        }
+        if (root.hasInvalid<List<PromptInjection.ModeInjection>>(json, "modeInjections") ||
+            root.hasInvalid<List<Lorebook>>(json, "lorebooks") ||
+            root.hasInvalid<List<QuickMessage>>(json, "quickMessages")
+        ) {
+            return BackupSettingsSchemaSection.PROMPTS
+        }
+        if (root.hasInvalid<WebDavConfig>(json, "webDavConfig") ||
+            root.hasInvalid<S3Config>(json, "s3Config") ||
+            root.hasInvalid<BackupReminderConfig>(json, "backupReminderConfig")
+        ) {
+            return BackupSettingsSchemaSection.BACKUP
+        }
+        return BackupSettingsSchemaSection.CORE
+    }
+
+    private inline fun <reified T> JsonObject.hasInvalid(json: Json, key: String): Boolean {
+        val value = this[key] ?: return false
+        return try {
+            json.decodeFromJsonElement<T>(value)
+            false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            true
+        }
     }
 }

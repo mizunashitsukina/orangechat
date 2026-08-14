@@ -56,7 +56,7 @@ import me.rerere.rikkahub.data.sync.LocalBackupPasswordFailure
 import me.rerere.rikkahub.data.sync.MAX_THIRD_PARTY_IMPORT_BYTES
 import me.rerere.rikkahub.data.sync.PreparedLocalBackup
 import me.rerere.rikkahub.data.sync.StagedLocalBackup
-import me.rerere.rikkahub.data.sync.backupRestoreDiagnosticCode
+import me.rerere.rikkahub.data.sync.backupRestoreDiagnosticValue
 import me.rerere.rikkahub.data.sync.validateLocalBackupExportPassword
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.StickyHeader
@@ -104,7 +104,7 @@ fun ImportExportTab(
     }
 
     fun showSafeRestoreDiagnostic(error: Throwable) {
-        val code = backupRestoreDiagnosticCode(error).value
+        val code = backupRestoreDiagnosticValue(error)
         toaster.show(
             context.getString(R.string.backup_page_restore_failed_diagnostic, code),
             type = ToastType.Error,

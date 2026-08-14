@@ -9,6 +9,8 @@ package me.rerere.rikkahub.ui.pages.backup.tabs
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CancellationException
+import me.rerere.rikkahub.data.datastore.migration.BackupSettingsCompatibilityException
+import me.rerere.rikkahub.data.datastore.migration.BackupSettingsSchemaSection
 import me.rerere.rikkahub.data.sync.BackupArchiveException
 import me.rerere.rikkahub.data.sync.BackupArchiveFailure
 import me.rerere.rikkahub.data.sync.BackupContainerException
@@ -17,6 +19,7 @@ import me.rerere.rikkahub.data.sync.BackupRestoreDiagnosticCode
 import me.rerere.rikkahub.data.sync.LocalBackupException
 import me.rerere.rikkahub.data.sync.LocalBackupFailure
 import me.rerere.rikkahub.data.sync.backupRestoreDiagnosticCode
+import me.rerere.rikkahub.data.sync.backupRestoreDiagnosticValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -96,6 +99,29 @@ class BackupImportErrorMappingTest {
         } catch (_: CancellationException) {
             // Expected: UI catches cancellation before requesting a diagnostic code.
         }
+    }
+
+    @Test
+    fun everySettingsSchemaSectionMapsToAStablePrivacySafeSubcode() {
+        val privateMarker = "private-settings-marker"
+        val values = BackupSettingsSchemaSection.entries.map { section ->
+            val error = BackupArchiveException(
+                BackupArchiveFailure.INVALID_SETTINGS,
+                BackupSettingsCompatibilityException(section, IllegalArgumentException(privateMarker)),
+            )
+            backupRestoreDiagnosticValue(error)
+        }
+
+        assertEquals(values.size, values.distinct().size)
+        assertTrue(values.all { it.matches(Regex("BR-30-[A-Z]")) })
+        assertTrue(values.none { it.contains(privateMarker) })
+    }
+
+    @Test
+    fun settingsWithoutAClassifiedCauseKeepsTheExistingBaseCode() {
+        val error = BackupArchiveException(BackupArchiveFailure.INVALID_SETTINGS)
+
+        assertEquals("BR-30", backupRestoreDiagnosticValue(error))
     }
 
     @Test

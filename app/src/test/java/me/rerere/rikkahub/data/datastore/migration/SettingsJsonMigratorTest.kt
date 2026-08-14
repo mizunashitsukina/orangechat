@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.utils.JsonInstant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.fail
 import org.junit.Test
@@ -85,6 +86,67 @@ class SettingsJsonMigratorTest {
         }
     }
 
+    @Test
+    fun rikkahub248PublicPolymorphicShapesReproduceCurrentSettingsFailure() {
+        upstreamOnlySections().forEach { (section, rootField, _) ->
+            try {
+                decodeSettings(
+                    settingsJson(
+                        titleModelId = null,
+                        suggestionModelId = null,
+                        extraRootField = rootField,
+                    )
+                )
+                fail("Expected the public RikkaHub 2.4.8 $section shape to be rejected")
+            } catch (_: SerializationException) {
+                // Reproduces BR-30 without retaining any user value or credential.
+            }
+        }
+    }
+
+    @Test
+    fun rikkahub248PublicFailuresReceiveStablePrivacySafeSchemaSections() {
+        upstreamOnlySections().forEach { (_, rootField, expectedSection) ->
+            val failure = try {
+                SettingsJsonMigrator.decodeBackupSettings(
+                    settingsJson(
+                        titleModelId = null,
+                        suggestionModelId = null,
+                        extraRootField = rootField,
+                    )
+                )
+                fail("Expected incompatible public RikkaHub 2.4.8 schema")
+                throw AssertionError("unreachable")
+            } catch (e: BackupSettingsCompatibilityException) {
+                e
+            }
+
+            assertEquals(expectedSection, failure.section)
+            assertFalse(failure.message.orEmpty().contains(LEGACY_PRIVATE_MARKER))
+            assertFalse(failure.section.diagnosticCode.contains(LEGACY_PRIVATE_MARKER))
+        }
+    }
+
+    @Test
+    fun unknownProviderRemainsAProviderSchemaFailure() {
+        val failure = try {
+            SettingsJsonMigrator.decodeBackupSettings(
+                settingsJson(
+                    titleModelId = null,
+                    suggestionModelId = null,
+                    providerType = "future-provider-$LEGACY_PRIVATE_MARKER",
+                )
+            )
+            fail("Expected unknown provider type to be rejected")
+            throw AssertionError("unreachable")
+        } catch (e: BackupSettingsCompatibilityException) {
+            e
+        }
+
+        assertEquals(BackupSettingsSchemaSection.PROVIDERS, failure.section)
+        assertFalse(failure.message.orEmpty().contains(LEGACY_PRIVATE_MARKER))
+    }
+
     private fun decodeSettings(source: String): Settings =
         JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
 
@@ -93,6 +155,7 @@ class SettingsJsonMigratorTest {
         suggestionModelId: String?,
         fastModelId: String = FAST_MODEL_ID,
         providerType: String = "openai",
+        extraRootField: String? = null,
     ): String = """
         {
           "chatModelId": "$CHAT_MODEL_ID",
@@ -108,16 +171,55 @@ class SettingsJsonMigratorTest {
                 {"id": "$CHAT_MODEL_ID", "modelId": "chat"}
               ]
             }
-          ]
+          ]${extraRootField?.let { ",\n$it" }.orEmpty()}
         }
     """.trimIndent()
 
     private fun String?.asJsonStringOrNull(): String = this?.let { "\"$it\"" } ?: "null"
+
+    private fun upstreamOnlySections() = listOf(
+        Triple(
+            "search",
+            """"searchServices":[{"type":"serper","id":"$LEGACY_ITEM_ID","apiKey":""}]""",
+            BackupSettingsSchemaSection.SEARCH,
+        ),
+        Triple(
+            "tts-step",
+            """"ttsProviders":[{"type":"step","id":"$LEGACY_ITEM_ID","name":""}]""",
+            BackupSettingsSchemaSection.TTS,
+        ),
+        Triple(
+            "tts-fish",
+            """"ttsProviders":[{"type":"fish-audio","id":"$LEGACY_ITEM_ID","name":""}]""",
+            BackupSettingsSchemaSection.TTS,
+        ),
+        Triple(
+            "asr-dashscope",
+            """"asrProviders":[{"type":"dashscope","id":"$LEGACY_ITEM_ID","name":""}]""",
+            BackupSettingsSchemaSection.ASR,
+        ),
+        Triple(
+            "asr-step",
+            """"asrProviders":[{"type":"step","id":"$LEGACY_ITEM_ID","name":""}]""",
+            BackupSettingsSchemaSection.ASR,
+        ),
+        Triple(
+            "assistant-tool",
+            """
+                "assistants":[
+                  {"id":"$LEGACY_ITEM_ID","localTools":[{"type":"screen_time"}]}
+                ]
+            """.trimIndent(),
+            BackupSettingsSchemaSection.ASSISTANTS,
+        ),
+    )
 
     private companion object {
         const val PROVIDER_ID = "10000000-0000-4000-8000-000000000001"
         const val FAST_MODEL_ID = "20000000-0000-4000-8000-000000000002"
         const val CHAT_MODEL_ID = "30000000-0000-4000-8000-000000000003"
         const val UNAVAILABLE_MODEL_ID = "40000000-0000-4000-8000-000000000004"
+        const val LEGACY_ITEM_ID = "50000000-0000-4000-8000-000000000005"
+        const val LEGACY_PRIVATE_MARKER = "private-schema-marker"
     }
 }

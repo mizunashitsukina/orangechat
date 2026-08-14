@@ -65,7 +65,7 @@ class BackupArchiveSecurityTest {
             stagingRoot = staging,
             limits = rikkahubFixtureLimits(),
             decodeSettings = { source ->
-                JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
+                SettingsJsonMigrator.decodeBackupSettings(source)
             },
             decodePluginSettings = { it },
             restoreTargets = restoreTargets(root),
@@ -94,7 +94,7 @@ class BackupArchiveSecurityTest {
                 stagingRoot = staging,
                 limits = rikkahubFixtureLimits(),
                 decodeSettings = { source ->
-                    JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
+                    SettingsJsonMigrator.decodeBackupSettings(source)
                 },
                 decodePluginSettings = { it },
                 restoreTargets = restoreTargets(root),
@@ -106,9 +106,35 @@ class BackupArchiveSecurityTest {
         }
 
         assertEquals(BackupArchiveFailure.INVALID_SETTINGS, failure!!.reason)
+        assertEquals("BR-30-P", backupRestoreDiagnosticValue(failure))
         assertFalse(failure.message.orEmpty().contains(providerType))
         assertFalse(staging.exists())
         assertFalse(applicationRoot.resolve("upload/attachment.bin").exists())
+    }
+
+    @Test
+    fun nullableModelWithoutARealFallbackRemainsInvalidSettings() = withTempDir { root ->
+        val archive = zip(root, mapOf(
+            "settings.json" to """{"titleModelId":null,"providers":[]}""",
+        ))
+        val staging = root.resolve("staging")
+        val failure = try {
+            BackupArchiveSecurity.stageAndPreflight<Settings, String>(
+                archive = archive,
+                stagingRoot = staging,
+                limits = limits(),
+                decodeSettings = { source -> SettingsJsonMigrator.decodeBackupSettings(source) },
+                decodePluginSettings = { it },
+            )
+            fail("Expected settings without a real model fallback to be rejected")
+            null
+        } catch (e: BackupArchiveException) {
+            e
+        }
+
+        assertEquals(BackupArchiveFailure.INVALID_SETTINGS, failure!!.reason)
+        assertEquals("BR-30-C", backupRestoreDiagnosticValue(failure))
+        assertFalse(staging.exists())
     }
 
     @Test fun forwardSlashTraversalIsRejected() = assertUnsafe("../escape")
@@ -771,9 +797,20 @@ class BackupArchiveSecurityTest {
               ]
             }
           ],
-          "assistants": [],
+          "assistants": [
+            {
+              "id": "$RIKKAHUB_ASSISTANT_ID",
+              "contextMessageLimit": 0,
+              "localTools": [{"type": "time_info"}],
+              "enableWebSearch": false,
+              "useGradientBackground": false,
+              "allowConversationPromptInjection": false
+            }
+          ],
           "assistantTags": [],
-          "searchServices": [],
+          "searchServices": [
+            {"type": "bing_local", "id": "$RIKKAHUB_SEARCH_ID"}
+          ],
           "searchCommonOptions": {},
           "searchServiceSelected": 0,
           "mcpServers": [],
@@ -793,12 +830,32 @@ class BackupArchiveSecurityTest {
             "pathStyle": true,
             "items": ["DATABASE", "FILES"]
           },
-          "ttsProviders": [],
-          "selectedTTSProviderId": "$RIKKAHUB_PROVIDER_ID",
+          "ttsProviders": [
+            {
+              "type": "system",
+              "id": "$RIKKAHUB_TTS_ID",
+              "name": "",
+              "speechRate": 1.0,
+              "pitch": 1.0
+            }
+          ],
+          "selectedTTSProviderId": "$RIKKAHUB_TTS_ID",
           "defaultTTSPlaybackSpeed": 1.0,
           "asrProviders": [],
           "selectedASRProviderId": null,
-          "modeInjections": [],
+          "modeInjections": [
+            {
+              "type": "mode",
+              "id": "$RIKKAHUB_INJECTION_ID",
+              "name": "",
+              "enabled": true,
+              "priority": 0,
+              "position": "after_system_prompt",
+              "content": "safe-mode-prompt",
+              "injectDepth": 4,
+              "role": "USER"
+            }
+          ],
           "lorebooks": [],
           "quickMessages": [],
           "webServerEnabled": false,
@@ -841,8 +898,8 @@ class BackupArchiveSecurityTest {
     )
 
     private fun rikkahubFixtureLimits() = limits(
-        maxTotalExtractedBytes = 8192,
-        maxSettingsJsonBytes = 4096,
+        maxTotalExtractedBytes = 32 * 1024,
+        maxSettingsJsonBytes = 16 * 1024,
     )
 
     private fun withTempDir(block: (File) -> Unit) {
@@ -858,5 +915,9 @@ class BackupArchiveSecurityTest {
         const val RIKKAHUB_PROVIDER_ID = "50000000-0000-4000-8000-000000000005"
         const val RIKKAHUB_FAST_MODEL_ID = "60000000-0000-4000-8000-000000000006"
         const val RIKKAHUB_CHAT_MODEL_ID = "70000000-0000-4000-8000-000000000007"
+        const val RIKKAHUB_ASSISTANT_ID = "80000000-0000-4000-8000-000000000008"
+        const val RIKKAHUB_SEARCH_ID = "90000000-0000-4000-8000-000000000009"
+        const val RIKKAHUB_TTS_ID = "a0000000-0000-4000-8000-00000000000a"
+        const val RIKKAHUB_INJECTION_ID = "b0000000-0000-4000-8000-00000000000b"
     }
 }
