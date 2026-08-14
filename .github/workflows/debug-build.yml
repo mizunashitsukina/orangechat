@@ -285,4 +285,4 @@ jobs:
           adb shell settings put global animator_duration_scale 0
 
           ./gradlew :app:connectedDebugAndroidTest \
-            -Pandroid.testInstrumentationRunnerArguments.class=me.rerere.rikkahub.data.sync.BackupContainerAndroidCompatibilityTest
+            -Pandroid.testInstrumentationRunnerArguments.class=me.rerere.rikkahub.data.sync.BackupContainerAndroidCompatibilityTest,me.rerere.rikkahub.data.db.migrations.Migration_25_26_Test

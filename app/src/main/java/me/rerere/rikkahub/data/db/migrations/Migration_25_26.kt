@@ -20,6 +20,36 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 object Migration_25_26 : Migration(25, 26) {
     override fun migrate(db: SupportSQLiteDatabase) {
+        val folderIdColumn = db.query("PRAGMA table_info(`conversationentity`)").use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            val typeIndex = cursor.getColumnIndexOrThrow("type")
+            val notNullIndex = cursor.getColumnIndexOrThrow("notnull")
+            val defaultValueIndex = cursor.getColumnIndexOrThrow("dflt_value")
+            val primaryKeyIndex = cursor.getColumnIndexOrThrow("pk")
+
+            var existingColumn: ExistingColumn? = null
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameIndex).equals(FOLDER_ID_COLUMN, ignoreCase = true)) {
+                    existingColumn = ExistingColumn(
+                        declaredType = cursor.getString(typeIndex),
+                        notNull = cursor.getInt(notNullIndex) == 1,
+                        defaultValue = if (cursor.isNull(defaultValueIndex)) {
+                            null
+                        } else {
+                            cursor.getString(defaultValueIndex)
+                        },
+                        primaryKeyPosition = cursor.getInt(primaryKeyIndex)
+                    )
+                    break
+                }
+            }
+            existingColumn
+        }
+
+        if (folderIdColumn != null && !folderIdColumn.isCompatible()) {
+            throw IllegalStateException("Existing folder column is incompatible with database schema v26")
+        }
+
         // 新建文件夹表
         db.execSQL(
             """
@@ -38,7 +68,24 @@ object Migration_25_26 : Migration(25, 26) {
                 "ON `conversation_folder` (`assistant_id`)"
         )
 
-        // 会话表增加 folder_id 列（默认空串 = 未归类）
-        db.execSQL("ALTER TABLE conversationentity ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''")
+        // RikkaHub 2.4.8 的 v24 数据库已经包含兼容的 folder_id；仅在缺少时新增。
+        if (folderIdColumn == null) {
+            db.execSQL("ALTER TABLE conversationentity ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''")
+        }
     }
+
+    private data class ExistingColumn(
+        val declaredType: String,
+        val notNull: Boolean,
+        val defaultValue: String?,
+        val primaryKeyPosition: Int
+    ) {
+        fun isCompatible(): Boolean =
+            declaredType.trim().equals("TEXT", ignoreCase = true) &&
+                notNull &&
+                defaultValue?.trim() == "''" &&
+                primaryKeyPosition == 0
+    }
+
+    private const val FOLDER_ID_COLUMN = "folder_id"
 }
