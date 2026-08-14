@@ -9,6 +9,7 @@ package me.rerere.rikkahub.data.datastore.migration
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonObject
+import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.utils.JsonInstant
 import org.junit.Assert.assertEquals
@@ -147,6 +148,91 @@ class SettingsJsonMigratorTest {
         assertFalse(failure.message.orEmpty().contains(LEGACY_PRIVATE_MARKER))
     }
 
+    @Test
+    fun rikkahub248ScreenTimeToolAndContextLimitArePreserved() {
+        val settings = SettingsJsonMigrator.decodeBackupSettings(
+            settingsJson(
+                titleModelId = null,
+                suggestionModelId = null,
+                extraRootField = """
+                    "assistants":[
+                      {
+                        "id":"$LEGACY_ITEM_ID",
+                        "chatModelId":null,
+                        "name":"",
+                        "avatar":{"type":"me.rerere.rikkahub.data.model.Avatar.Dummy"},
+                        "useAssistantAvatar":false,
+                        "tags":[],
+                        "systemPrompt":"",
+                        "temperature":null,
+                        "topP":null,
+                        "contextMessageLimit":24,
+                        "streamOutput":true,
+                        "enableMemory":false,
+                        "useGlobalMemory":false,
+                        "enableRecentChatsReference":false,
+                        "messageTemplate":"{{ message }}",
+                        "presetMessages":[],
+                        "quickMessageIds":[],
+                        "regexes":[],
+                        "reasoningLevel":"auto",
+                        "maxTokens":null,
+                        "customHeaders":[],
+                        "customBodies":[],
+                        "mcpServers":[],
+                        "localTools":[{"type":"screen_time"}],
+                        "enableWebSearch":false,
+                        "workspaceId":null,
+                        "background":null,
+                        "backgroundOpacity":1.0,
+                        "useGradientBackground":false,
+                        "modeInjectionIds":[],
+                        "lorebookIds":[],
+                        "enabledSkills":[],
+                        "enableTimeReminder":false,
+                        "allowConversationSystemPrompt":false,
+                        "allowConversationPromptInjection":false
+                      }
+                    ]
+                """.trimIndent(),
+            )
+        )
+
+        val assistant = settings.assistants.single()
+        assertEquals(24, assistant.contextMessageSize)
+        assertEquals(listOf(LocalToolOption.LegacyScreenTime), assistant.localTools)
+
+        val roundTripped = JsonInstant.decodeFromString<Settings>(JsonInstant.encodeToString(settings))
+        assertEquals(listOf(LocalToolOption.LegacyScreenTime), roundTripped.assistants.single().localTools)
+    }
+
+    @Test
+    fun unknownAssistantToolRemainsAnAssistantSchemaFailure() {
+        val failure = try {
+            SettingsJsonMigrator.decodeBackupSettings(
+                settingsJson(
+                    titleModelId = null,
+                    suggestionModelId = null,
+                    extraRootField = """
+                        "assistants":[
+                          {
+                            "id":"$LEGACY_ITEM_ID",
+                            "localTools":[{"type":"future-tool-$LEGACY_PRIVATE_MARKER"}]
+                          }
+                        ]
+                    """.trimIndent(),
+                )
+            )
+            fail("Expected an unknown assistant tool to be rejected")
+            throw AssertionError("unreachable")
+        } catch (e: BackupSettingsCompatibilityException) {
+            e
+        }
+
+        assertEquals(BackupSettingsSchemaSection.ASSISTANTS, failure.section)
+        assertFalse(failure.message.orEmpty().contains(LEGACY_PRIVATE_MARKER))
+    }
+
     private fun decodeSettings(source: String): Settings =
         JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
 
@@ -202,15 +288,6 @@ class SettingsJsonMigratorTest {
             "asr-step",
             """"asrProviders":[{"type":"step","id":"$LEGACY_ITEM_ID","name":""}]""",
             BackupSettingsSchemaSection.ASR,
-        ),
-        Triple(
-            "assistant-tool",
-            """
-                "assistants":[
-                  {"id":"$LEGACY_ITEM_ID","localTools":[{"type":"screen_time"}]}
-                ]
-            """.trimIndent(),
-            BackupSettingsSchemaSection.ASSISTANTS,
         ),
     )
 

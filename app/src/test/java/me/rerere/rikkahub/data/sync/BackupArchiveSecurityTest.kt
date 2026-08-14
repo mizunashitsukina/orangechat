@@ -6,6 +6,7 @@
 
 package me.rerere.rikkahub.data.sync
 
+import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigrator
 import me.rerere.rikkahub.data.files.SkillPaths
@@ -73,6 +74,8 @@ class BackupArchiveSecurityTest {
 
         assertEquals(RIKKAHUB_FAST_MODEL_ID, result.settings.titleModelId.toString())
         assertEquals(RIKKAHUB_FAST_MODEL_ID, result.settings.suggestionModelId.toString())
+        assertEquals(0, result.settings.assistants.single().contextMessageSize)
+        assertEquals(listOf(LocalToolOption.LegacyScreenTime), result.settings.assistants.single().localTools)
         assertTrue(staging.resolve("fonts/custom-font.ttf").isFile)
         assertFalse(applicationRoot.resolve("fonts/custom-font.ttf").exists())
         assertEquals(7, result.entryCount)
@@ -801,7 +804,7 @@ class BackupArchiveSecurityTest {
             {
               "id": "$RIKKAHUB_ASSISTANT_ID",
               "contextMessageLimit": 0,
-              "localTools": [{"type": "time_info"}],
+              "localTools": [{"type": "screen_time"}],
               "enableWebSearch": false,
               "useGradientBackground": false,
               "allowConversationPromptInjection": false

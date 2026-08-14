@@ -116,7 +116,8 @@ object SettingsJsonMigrator {
 
             // V2: 修复 assistants 中 UIMessagePart 的 type 字段
             root["assistants"]?.let { element ->
-                val migrated = migrateAssistantsJson(JsonInstant.encodeToString(element))
+                val renamed = migrateRikkaHubAssistantFields(element)
+                val migrated = migrateAssistantsJson(JsonInstant.encodeToString(renamed))
                 root["assistants"] = JsonInstant.parseToJsonElement(migrated)
             }
 
@@ -188,6 +189,21 @@ object SettingsJsonMigrator {
             ?.contentOrNull
             ?: return null
         return runCatching { Uuid.parse(value) }.getOrNull()
+    }
+
+    /** Migrates only the confirmed, semantically identical RikkaHub 2.4.8 assistant field. */
+    private fun migrateRikkaHubAssistantFields(assistants: JsonElement): JsonElement {
+        val array = assistants as? JsonArray ?: return assistants
+        return JsonArray(array.map { element ->
+            val assistant = element as? JsonObject ?: return@map element
+            if ("contextMessageSize" in assistant || "contextMessageLimit" !in assistant) {
+                return@map assistant
+            }
+            JsonObject(assistant.toMutableMap().apply {
+                put("contextMessageSize", assistant.getValue("contextMessageLimit"))
+                remove("contextMessageLimit")
+            })
+        })
     }
 
     private fun classifyFailureSection(settingsJson: String, json: Json): BackupSettingsSchemaSection {
