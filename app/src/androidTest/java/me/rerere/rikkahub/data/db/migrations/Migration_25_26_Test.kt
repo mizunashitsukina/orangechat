@@ -6,6 +6,7 @@
 
 package me.rerere.rikkahub.data.db.migrations
 
+import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
@@ -33,7 +34,10 @@ class Migration_25_26_Test {
     @Test
     fun orangeChatV25AddsFolderColumnAndPreservesData() {
         helper.createDatabase("migration-25-26-orangechat", 25).apply {
-            insertConversationAndMessage("conversation-orangechat", "message-orangechat")
+            insertConversationAndMessage(
+                conversationId = "conversation-orangechat",
+                messageId = "message-orangechat"
+            )
             close()
         }
 
@@ -46,14 +50,30 @@ class Migration_25_26_Test {
 
         assertCompatibleFolderColumn(db)
         assertEquals("", queryString(db, "SELECT folder_id FROM conversationentity"))
-        assertPreservedConversationAndMessage(db, "conversation-orangechat", "message-orangechat")
+        assertPreservedConversationAndMessage(
+            db = db,
+            conversationId = "conversation-orangechat",
+            messageId = "message-orangechat"
+        )
         assertEquals(26, queryInt(db, "PRAGMA user_version"))
         db.close()
     }
 
     @Test
-    fun rikkaHub248StyleV25KeepsExistingFolderSchemaAndData() {
+    fun completeRikkaHub248SchemaIsNormalizedAndLegacyDataIsPreserved() {
         helper.createDatabase("migration-25-26-rikkahub", 25).apply {
+            execSQL(
+                "ALTER TABLE conversationentity " +
+                    "ADD COLUMN mode_injection_ids TEXT NOT NULL DEFAULT '[]'"
+            )
+            execSQL(
+                "ALTER TABLE conversationentity " +
+                    "ADD COLUMN lorebook_ids TEXT NOT NULL DEFAULT '[]'"
+            )
+            execSQL(
+                "ALTER TABLE conversationentity " +
+                    "ADD COLUMN workspace_cwd TEXT NOT NULL DEFAULT ''"
+            )
             execSQL("ALTER TABLE conversationentity ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''")
             createFolderObjects()
             execSQL(
@@ -62,9 +82,19 @@ class Migration_25_26_Test {
                 arrayOf<Any?>("folder-existing", "assistant-existing", "Existing folder", 7, 1234L)
             )
             insertConversationAndMessage(
-                "conversation-rikkahub",
-                "message-rikkahub",
-                "folder-existing"
+                conversationId = "conversation-rikkahub",
+                messageId = "message-rikkahub",
+                folderId = "folder-existing",
+                assistantId = "assistant-rikkahub",
+                title = "RikkaHub conversation",
+                nodes = "[\"preserved-node\"]",
+                customSystemPrompt = "preserved-system-prompt",
+                legacyMetadata = LegacyMetadata(
+                    modeInjectionIds = "[\"mode-test-id\"]",
+                    lorebookIds = "[\"lorebook-test-id\"]",
+                    workspaceCwd = "/workspace/project"
+                ),
+                messages = "[\"preserved-message\"]"
             )
             close()
         }
@@ -72,12 +102,14 @@ class Migration_25_26_Test {
         val db = helper.runMigrationsAndValidate(
             "migration-25-26-rikkahub",
             26,
-            true,
+            false,
             Migration_25_26
         )
 
         assertCompatibleFolderColumn(db)
         assertEquals("folder-existing", queryString(db, "SELECT folder_id FROM conversationentity"))
+        assertLegacyColumnsRemoved(db)
+        assertLegacyMetadataPreserved(db)
         assertEquals(1, queryInt(db, "SELECT COUNT(*) FROM conversation_folder"))
         assertEquals(
             1,
@@ -87,9 +119,38 @@ class Migration_25_26_Test {
                     "WHERE type = 'index' AND name = 'index_conversation_folder_assistant_id'"
             )
         )
-        assertPreservedConversationAndMessage(db, "conversation-rikkahub", "message-rikkahub")
+        assertPreservedConversationAndMessage(
+            db = db,
+            conversationId = "conversation-rikkahub",
+            messageId = "message-rikkahub",
+            assistantId = "assistant-rikkahub",
+            title = "RikkaHub conversation",
+            nodes = "[\"preserved-node\"]",
+            customSystemPrompt = "preserved-system-prompt",
+            messages = "[\"preserved-message\"]"
+        )
         assertEquals(26, queryInt(db, "PRAGMA user_version"))
         db.close()
+
+        val roomDatabase = Room.databaseBuilder(
+            InstrumentationRegistry.getInstrumentation().targetContext,
+            AppDatabase::class.java,
+            "migration-25-26-rikkahub"
+        ).allowMainThreadQueries().build()
+        val currentDb = roomDatabase.openHelper.writableDatabase
+        assertEquals(29, currentDb.version)
+        assertLegacyMetadataPreserved(currentDb)
+        assertPreservedConversationAndMessage(
+            db = currentDb,
+            conversationId = "conversation-rikkahub",
+            messageId = "message-rikkahub",
+            assistantId = "assistant-rikkahub",
+            title = "RikkaHub conversation",
+            nodes = "[\"preserved-node\"]",
+            customSystemPrompt = "preserved-system-prompt",
+            messages = "[\"preserved-message\"]"
+        )
+        roomDatabase.close()
     }
 
     @Test
@@ -97,9 +158,9 @@ class Migration_25_26_Test {
         val db = helper.createDatabase("migration-25-26-incompatible", 25).apply {
             execSQL("ALTER TABLE conversationentity ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 0")
             insertConversationAndMessage(
-                "conversation-incompatible",
-                "message-incompatible",
-                9
+                conversationId = "conversation-incompatible",
+                messageId = "message-incompatible",
+                folderId = 9
             )
         }
 
@@ -115,9 +176,9 @@ class Migration_25_26_Test {
         assertTrue(failure is IllegalStateException)
         assertEquals(9, queryInt(db, "SELECT folder_id FROM conversationentity"))
         assertPreservedConversationAndMessage(
-            db,
-            "conversation-incompatible",
-            "message-incompatible"
+            db = db,
+            conversationId = "conversation-incompatible",
+            messageId = "message-incompatible"
         )
         assertEquals(
             0,
@@ -127,6 +188,39 @@ class Migration_25_26_Test {
                     "WHERE type = 'table' AND name = 'conversation_folder'"
             )
         )
+        db.close()
+    }
+
+    @Test
+    fun unknownExtraConversationColumnFailsBeforeChangingData() {
+        val db = helper.createDatabase("migration-25-26-unknown-column", 25).apply {
+            execSQL(
+                "ALTER TABLE conversationentity " +
+                    "ADD COLUMN unexpected_legacy_data TEXT NOT NULL DEFAULT ''"
+            )
+            insertConversationAndMessage(
+                conversationId = "conversation-unknown",
+                messageId = "message-unknown"
+            )
+        }
+
+        val failure = try {
+            Migration_25_26.migrate(db)
+            fail("Migration must reject an unknown source column")
+            null
+        } catch (throwable: Throwable) {
+            throwable
+        }
+
+        assertNotNull(failure)
+        assertTrue(failure is IllegalStateException)
+        assertPreservedConversationAndMessage(
+            db = db,
+            conversationId = "conversation-unknown",
+            messageId = "message-unknown"
+        )
+        assertEquals(0, tableCount(db, "conversation_folder"))
+        assertEquals(0, tableCount(db, "rikkahub_248_conversation_compat"))
         db.close()
     }
 
@@ -152,27 +246,62 @@ class Migration_25_26_Test {
     private fun SupportSQLiteDatabase.insertConversationAndMessage(
         conversationId: String,
         messageId: String,
-        folderId: Any? = null
+        folderId: Any? = null,
+        assistantId: String = "assistant-test",
+        title: String = "Test conversation",
+        nodes: String = "[]",
+        customSystemPrompt: String = "",
+        legacyMetadata: LegacyMetadata? = null,
+        messages: String = "[]"
     ) {
-        if (folderId == null) {
+        if (legacyMetadata != null) {
             execSQL(
                 "INSERT INTO conversationentity " +
-                    "(id, assistant_id, title, nodes, create_at, update_at) " +
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                arrayOf<Any?>(conversationId, "assistant-test", "Test conversation", "[]", 100L, 200L)
+                    "(id, assistant_id, title, nodes, create_at, update_at, custom_system_prompt, " +
+                    "folder_id, mode_injection_ids, lorebook_ids, workspace_cwd) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                arrayOf<Any?>(
+                    conversationId,
+                    assistantId,
+                    title,
+                    nodes,
+                    100L,
+                    200L,
+                    customSystemPrompt,
+                    folderId,
+                    legacyMetadata.modeInjectionIds,
+                    legacyMetadata.lorebookIds,
+                    legacyMetadata.workspaceCwd
+                )
+            )
+        } else if (folderId == null) {
+            execSQL(
+                "INSERT INTO conversationentity " +
+                    "(id, assistant_id, title, nodes, create_at, update_at, custom_system_prompt) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                arrayOf<Any?>(
+                    conversationId,
+                    assistantId,
+                    title,
+                    nodes,
+                    100L,
+                    200L,
+                    customSystemPrompt
+                )
             )
         } else {
             execSQL(
                 "INSERT INTO conversationentity " +
-                    "(id, assistant_id, title, nodes, create_at, update_at, folder_id) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                arrayOf(
+                    "(id, assistant_id, title, nodes, create_at, update_at, " +
+                    "custom_system_prompt, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                arrayOf<Any?>(
                     conversationId,
-                    "assistant-test",
-                    "Test conversation",
-                    "[]",
+                    assistantId,
+                    title,
+                    nodes,
                     100L,
                     200L,
+                    customSystemPrompt,
                     folderId
                 )
             )
@@ -180,8 +309,32 @@ class Migration_25_26_Test {
         execSQL(
             "INSERT INTO message_node " +
                 "(id, conversation_id, node_index, messages, select_index) VALUES (?, ?, ?, ?, ?)",
-            arrayOf<Any?>(messageId, conversationId, 0, "[]", 0)
+            arrayOf<Any?>(messageId, conversationId, 0, messages, 0)
         )
+    }
+
+    private fun assertLegacyColumnsRemoved(db: SupportSQLiteDatabase) {
+        val columns = mutableSetOf<String>()
+        db.query("PRAGMA table_info(`conversationentity`)").use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex).lowercase()
+        }
+        assertTrue("mode_injection_ids must not remain in Room entity", "mode_injection_ids" !in columns)
+        assertTrue("lorebook_ids must not remain in Room entity", "lorebook_ids" !in columns)
+        assertTrue("workspace_cwd must not remain in Room entity", "workspace_cwd" !in columns)
+    }
+
+    private fun assertLegacyMetadataPreserved(db: SupportSQLiteDatabase) {
+        db.query(
+            "SELECT mode_injection_ids, lorebook_ids, workspace_cwd " +
+                "FROM rikkahub_248_conversation_compat WHERE conversation_id = ?",
+            arrayOf("conversation-rikkahub")
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("[\"mode-test-id\"]", cursor.getString(0))
+            assertEquals("[\"lorebook-test-id\"]", cursor.getString(1))
+            assertEquals("/workspace/project", cursor.getString(2))
+        }
     }
 
     private fun assertCompatibleFolderColumn(db: SupportSQLiteDatabase) {
@@ -203,15 +356,21 @@ class Migration_25_26_Test {
     private fun assertPreservedConversationAndMessage(
         db: SupportSQLiteDatabase,
         conversationId: String,
-        messageId: String
+        messageId: String,
+        assistantId: String = "assistant-test",
+        title: String = "Test conversation",
+        nodes: String = "[]",
+        customSystemPrompt: String = "",
+        messages: String = "[]"
     ) {
         assertEquals(
             1,
             queryInt(
                 db,
                 "SELECT COUNT(*) FROM conversationentity " +
-                    "WHERE id = ? AND title = ? AND nodes = ?",
-                arrayOf(conversationId, "Test conversation", "[]")
+                    "WHERE id = ? AND assistant_id = ? AND title = ? AND nodes = ? " +
+                    "AND custom_system_prompt = ?",
+                arrayOf(conversationId, assistantId, title, nodes, customSystemPrompt)
             )
         )
         assertEquals(
@@ -220,7 +379,7 @@ class Migration_25_26_Test {
                 db,
                 "SELECT COUNT(*) FROM message_node " +
                     "WHERE id = ? AND conversation_id = ? AND messages = ?",
-                arrayOf(messageId, conversationId, "[]")
+                arrayOf(messageId, conversationId, messages)
             )
         )
     }
@@ -239,4 +398,16 @@ class Migration_25_26_Test {
             assertTrue(cursor.moveToFirst())
             cursor.getString(0)
         }
+
+    private fun tableCount(db: SupportSQLiteDatabase, table: String): Int = queryInt(
+        db,
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+        arrayOf(table)
+    )
+
+    private data class LegacyMetadata(
+        val modeInjectionIds: String,
+        val lorebookIds: String,
+        val workspaceCwd: String
+    )
 }
