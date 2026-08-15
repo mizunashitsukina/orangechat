@@ -115,6 +115,7 @@ object Migration_24_25 : Migration(24, 25) {
     private data class ColumnSpec(
         val declaredType: String,
         val notNull: Boolean,
+        val defaultValue: String? = null,
         val primaryKeyPosition: Int = 0
     )
 
