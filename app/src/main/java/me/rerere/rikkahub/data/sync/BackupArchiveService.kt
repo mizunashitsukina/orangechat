@@ -10,7 +10,6 @@ import android.content.Context
 import android.os.Environment
 import android.util.Log
 import kotlinx.serialization.json.Json
-import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigrator
 import me.rerere.rikkahub.data.files.FileFolders
@@ -100,7 +99,7 @@ class BackupArchiveService(
             archive = archive,
             stagingRoot = stagingRoot,
             decodeSettings = { source ->
-                json.decodeFromString<Settings>(SettingsJsonMigrator.migrate(source))
+                SettingsJsonMigrator.decodeBackupSettings(source, json)
             },
             decodePluginSettings = { source -> json.decodeFromString<PluginSettingsExport>(source) },
             restoreTargets = BackupRestoreTargets(

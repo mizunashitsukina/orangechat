@@ -6,6 +6,7 @@
 
 package me.rerere.rikkahub.data.sync
 
+import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigrator
 import me.rerere.rikkahub.data.files.SkillPaths
@@ -47,7 +48,7 @@ class BackupArchiveSecurityTest {
     }
 
     @Test
-    fun rikkahub248StyleArchivePassesPreflightWithFontsAsSafeUnknownData() = withTempDir { root ->
+    fun rikkahub248FullAppDataArchiveReachesRestoreReadyStage() = withTempDir { root ->
         val archive = zip(root, mapOf(
             "settings.json" to rikkahubSettingsJson(),
             "rikka_hub.db" to "database",
@@ -63,9 +64,9 @@ class BackupArchiveSecurityTest {
         val result = BackupArchiveSecurity.stageAndPreflight<Settings, String>(
             archive = archive,
             stagingRoot = staging,
-            limits = limits(),
+            limits = rikkahubFixtureLimits(),
             decodeSettings = { source ->
-                JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
+                SettingsJsonMigrator.decodeBackupSettings(source)
             },
             decodePluginSettings = { it },
             restoreTargets = restoreTargets(root),
@@ -73,6 +74,8 @@ class BackupArchiveSecurityTest {
 
         assertEquals(RIKKAHUB_FAST_MODEL_ID, result.settings.titleModelId.toString())
         assertEquals(RIKKAHUB_FAST_MODEL_ID, result.settings.suggestionModelId.toString())
+        assertEquals(0, result.settings.assistants.single().contextMessageSize)
+        assertEquals(listOf(LocalToolOption.LegacyScreenTime), result.settings.assistants.single().localTools)
         assertTrue(staging.resolve("fonts/custom-font.ttf").isFile)
         assertFalse(applicationRoot.resolve("fonts/custom-font.ttf").exists())
         assertEquals(7, result.entryCount)
@@ -92,9 +95,9 @@ class BackupArchiveSecurityTest {
             BackupArchiveSecurity.stageAndPreflight<Settings, String>(
                 archive = archive,
                 stagingRoot = staging,
-                limits = limits(),
+                limits = rikkahubFixtureLimits(),
                 decodeSettings = { source ->
-                    JsonInstant.decodeFromString(SettingsJsonMigrator.migrate(source))
+                    SettingsJsonMigrator.decodeBackupSettings(source)
                 },
                 decodePluginSettings = { it },
                 restoreTargets = restoreTargets(root),
@@ -106,9 +109,35 @@ class BackupArchiveSecurityTest {
         }
 
         assertEquals(BackupArchiveFailure.INVALID_SETTINGS, failure!!.reason)
+        assertEquals("BR-30-P", backupRestoreDiagnosticValue(failure))
         assertFalse(failure.message.orEmpty().contains(providerType))
         assertFalse(staging.exists())
         assertFalse(applicationRoot.resolve("upload/attachment.bin").exists())
+    }
+
+    @Test
+    fun nullableModelWithoutARealFallbackRemainsInvalidSettings() = withTempDir { root ->
+        val archive = zip(root, mapOf(
+            "settings.json" to """{"titleModelId":null,"providers":[]}""",
+        ))
+        val staging = root.resolve("staging")
+        val failure = try {
+            BackupArchiveSecurity.stageAndPreflight<Settings, String>(
+                archive = archive,
+                stagingRoot = staging,
+                limits = limits(),
+                decodeSettings = { source -> SettingsJsonMigrator.decodeBackupSettings(source) },
+                decodePluginSettings = { it },
+            )
+            fail("Expected settings without a real model fallback to be rejected")
+            null
+        } catch (e: BackupArchiveException) {
+            e
+        }
+
+        assertEquals(BackupArchiveFailure.INVALID_SETTINGS, failure!!.reason)
+        assertEquals("BR-30-C", backupRestoreDiagnosticValue(failure))
+        assertFalse(staging.exists())
     }
 
     @Test fun forwardSlashTraversalIsRejected() = assertUnsafe("../escape")
@@ -729,12 +758,38 @@ class BackupArchiveSecurityTest {
         return archive
     }
 
+    // Mirrors the public RikkaHub 2.4.8 Settings shape with all credential-bearing values intentionally empty.
     private fun rikkahubSettingsJson(providerType: String = "openai"): String = """
         {
+          "dynamicColor": true,
+          "themeId": "default",
+          "customThemes": [],
+          "developerMode": false,
+          "displaySetting": {
+            "bubbleOpacity": 1.0,
+            "showDateTimeInMessage": false,
+            "updateCheckDisabledUntilEpochMillis": 0,
+            "ttsOnlyReadOutsideBrackets": false,
+            "chatCustomFontPath": "",
+            "chatCustomFontName": ""
+          },
+          "favoriteModels": [],
           "chatModelId": "$RIKKAHUB_CHAT_MODEL_ID",
           "fastModelId": "$RIKKAHUB_FAST_MODEL_ID",
           "titleModelId": null,
+          "imageGenerationModelId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "titlePrompt": "safe-title-prompt",
+          "translateModeId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "translatePrompt": "safe-translate-prompt",
+          "translateThinkingBudget": 0,
+          "enableSuggestion": true,
           "suggestionModelId": null,
+          "suggestionPrompt": "safe-suggestion-prompt",
+          "ocrModelId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "ocrPrompt": "safe-ocr-prompt",
+          "compressModelId": "$RIKKAHUB_CHAT_MODEL_ID",
+          "compressPrompt": "safe-compress-prompt",
+          "assistantId": "$RIKKAHUB_PROVIDER_ID",
           "providers": [
             {
               "type": "$providerType",
@@ -744,7 +799,80 @@ class BackupArchiveSecurityTest {
                 {"id": "$RIKKAHUB_CHAT_MODEL_ID", "modelId": "chat"}
               ]
             }
-          ]
+          ],
+          "assistants": [
+            {
+              "id": "$RIKKAHUB_ASSISTANT_ID",
+              "contextMessageLimit": 0,
+              "localTools": [{"type": "screen_time"}],
+              "enableWebSearch": false,
+              "useGradientBackground": false,
+              "allowConversationPromptInjection": false
+            }
+          ],
+          "assistantTags": [],
+          "searchServices": [
+            {"type": "bing_local", "id": "$RIKKAHUB_SEARCH_ID"}
+          ],
+          "searchCommonOptions": {},
+          "searchServiceSelected": 0,
+          "mcpServers": [],
+          "webDavConfig": {
+            "url": "",
+            "username": "",
+            "password": "",
+            "path": "rikkahub_backups",
+            "items": ["DATABASE", "FILES"]
+          },
+          "s3Config": {
+            "endpoint": "",
+            "accessKeyId": "",
+            "secretAccessKey": "",
+            "bucket": "",
+            "region": "auto",
+            "pathStyle": true,
+            "items": ["DATABASE", "FILES"]
+          },
+          "ttsProviders": [
+            {
+              "type": "system",
+              "id": "$RIKKAHUB_TTS_ID",
+              "name": "",
+              "speechRate": 1.0,
+              "pitch": 1.0
+            }
+          ],
+          "selectedTTSProviderId": "$RIKKAHUB_TTS_ID",
+          "defaultTTSPlaybackSpeed": 1.0,
+          "asrProviders": [],
+          "selectedASRProviderId": null,
+          "modeInjections": [
+            {
+              "type": "mode",
+              "id": "$RIKKAHUB_INJECTION_ID",
+              "name": "",
+              "enabled": true,
+              "priority": 0,
+              "position": "after_system_prompt",
+              "content": "safe-mode-prompt",
+              "injectDepth": 4,
+              "role": "user"
+            }
+          ],
+          "lorebooks": [],
+          "quickMessages": [],
+          "webServerEnabled": false,
+          "webServerPort": 8080,
+          "webServerJwtEnabled": false,
+          "webServerAccessPassword": "",
+          "webServerLocalhostOnly": false,
+          "backupReminderConfig": {
+            "enabled": false,
+            "intervalDays": 7,
+            "lastBackupTime": 0
+          },
+          "launchCount": 0,
+          "sponsorAlertDismissedAt": 0
         }
     """.trimIndent()
 
@@ -772,6 +900,11 @@ class BackupArchiveSecurityTest {
         maxPluginSettingsJsonBytes = maxPluginSettingsJsonBytes,
     )
 
+    private fun rikkahubFixtureLimits() = limits(
+        maxTotalExtractedBytes = 32 * 1024,
+        maxSettingsJsonBytes = 16 * 1024,
+    )
+
     private fun withTempDir(block: (File) -> Unit) {
         val root = Files.createTempDirectory("backup-security-").toFile()
         try {
@@ -785,5 +918,9 @@ class BackupArchiveSecurityTest {
         const val RIKKAHUB_PROVIDER_ID = "50000000-0000-4000-8000-000000000005"
         const val RIKKAHUB_FAST_MODEL_ID = "60000000-0000-4000-8000-000000000006"
         const val RIKKAHUB_CHAT_MODEL_ID = "70000000-0000-4000-8000-000000000007"
+        const val RIKKAHUB_ASSISTANT_ID = "80000000-0000-4000-8000-000000000008"
+        const val RIKKAHUB_SEARCH_ID = "90000000-0000-4000-8000-000000000009"
+        const val RIKKAHUB_TTS_ID = "a0000000-0000-4000-8000-00000000000a"
+        const val RIKKAHUB_INJECTION_ID = "b0000000-0000-4000-8000-00000000000b"
     }
 }

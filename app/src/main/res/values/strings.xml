@@ -192,6 +192,7 @@
   <string name="backup_page_encrypted_import_prompt">Enter the password used when this backup was exported.</string>
   <string name="backup_page_encrypted_auth_failed">Password is incorrect or backup file is damaged</string>
   <string name="backup_page_restore_failed_generic">Unable to restore backup safely</string>
+  <string name="backup_page_restore_failed_diagnostic">Unable to restore backup safely (diagnostic code: %1$s)</string>
   <string name="backup_page_settings_incompatible">Backup settings are incompatible with this version</string>
   <string name="backup_page_unsafe_archive_path">Backup contains an unsafe file path</string>
   <string name="backup_page_archive_limits_exceeded">Backup exceeds safe import limits</string>

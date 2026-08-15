@@ -150,6 +150,53 @@ class LocalBackupServiceTest {
     }
 
     @Test
+    fun typedArchiveRestoreFailureRemainsAvailableForDiagnostics() = withTempDir { root ->
+        val service = service(
+            root = root,
+            restoreArchive = { throw BackupArchiveException(BackupArchiveFailure.INVALID_SETTINGS) },
+        )
+        val staged = runBlocking { service.stageImport { ByteArrayInputStream(legacyBytes(root)) } }
+
+        val failure = try {
+            runBlocking { service.restore(staged, legacyConfirmed = true) }
+            fail("Expected archive restore failure")
+            throw AssertionError("unreachable")
+        } catch (e: BackupArchiveException) {
+            e
+        }
+
+        assertEquals(BackupArchiveFailure.INVALID_SETTINGS, failure.reason)
+        assertEquals(
+            BackupRestoreDiagnosticCode.INCOMPATIBLE_SETTINGS,
+            backupRestoreDiagnosticCode(failure),
+        )
+        assertNoLocalTemporaryFiles(root)
+    }
+
+    @Test
+    fun ordinaryRestoreWriteFailureUsesSafeLocalIoDiagnostic() = withTempDir { root ->
+        val privateMarker = "private-write-failure-marker"
+        val service = service(
+            root = root,
+            restoreArchive = { throw IOException(privateMarker) },
+        )
+        val staged = runBlocking { service.stageImport { ByteArrayInputStream(legacyBytes(root)) } }
+
+        val failure = try {
+            runBlocking { service.restore(staged, legacyConfirmed = true) }
+            fail("Expected restore write failure")
+            throw AssertionError("unreachable")
+        } catch (e: LocalBackupException) {
+            e
+        }
+
+        assertEquals(LocalBackupFailure.IO_FAILURE, failure.reason)
+        assertEquals(BackupRestoreDiagnosticCode.LOCAL_IO_FAILURE, backupRestoreDiagnosticCode(failure))
+        assertFalse(failure.toString().contains(privateMarker))
+        assertNoLocalTemporaryFiles(root)
+    }
+
+    @Test
     fun passwordPolicyCountsUnicodeCodePointsAndRequiresMatchingConfirmation() {
         assertEquals(
             LocalBackupPasswordFailure.EMPTY,
