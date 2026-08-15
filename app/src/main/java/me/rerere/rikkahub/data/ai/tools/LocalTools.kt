@@ -61,7 +61,17 @@ sealed class LocalToolOption {
     @Serializable
     @SerialName("ask_user")
     data object AskUser : LocalToolOption()
- 
+
+    /**
+     * RikkaHub 2.4.8 compatibility marker. The former per-assistant screen-time tool has no
+     * semantically equivalent local replacement: OrangeChat's app-usage tool is a global,
+     * separately permissioned system tool. Keep the setting round-trippable without silently
+     * granting that broader capability.
+     */
+    @Serializable
+    @SerialName("screen_time")
+    data object LegacyScreenTime : LocalToolOption()
+
     /**
      * 已废弃: 本地短信工具与系统工具(SystemToolOption.Sms)都注册成同名 read_sms,
      * 同时启用会让某些模型因同名工具报错发不出消息。短信读取统一改由系统工具侧提供
