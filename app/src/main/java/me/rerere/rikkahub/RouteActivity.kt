@@ -123,6 +123,7 @@ import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesPage
 import me.rerere.rikkahub.ui.pages.extensions.SkillDetailPage
 import me.rerere.rikkahub.ui.pages.extensions.SkillsPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceDetailPage
+import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceFilePreviewPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspacePage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceTerminalPage
 import me.rerere.rikkahub.ui.pages.favorite.FavoritePage
@@ -667,6 +668,14 @@ entry<Screen.Extensions> {
                                 WorkspaceDetailPage(key.id)
                             }
 
+                            entry<Screen.WorkspaceFiles> { key ->
+                                WorkspaceDetailPage(key.id, initialPage = 1)
+                            }
+
+                            entry<Screen.WorkspaceFilePreview> { key ->
+                                WorkspaceFilePreviewPage(key.id, key.area, key.path)
+                            }
+
                             entry<Screen.WorkspaceTerminal> { key ->
                                 WorkspaceTerminalPage(key.id)
                             }
@@ -1053,6 +1062,16 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data class WorkspaceDetail(val id: String) : Screen
+
+    @Serializable
+    data class WorkspaceFiles(val id: String) : Screen
+
+    @Serializable
+    data class WorkspaceFilePreview(
+        val id: String,
+        val area: String,
+        val path: String,
+    ) : Screen
 
     @Serializable
     data class WorkspaceTerminal(val id: String) : Screen

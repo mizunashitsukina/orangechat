@@ -1115,6 +1115,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="extensions_page_workspace_desc">为助手提供沙盒化 Linux 文件区和 Shell 工具</string>
   <string name="assistant_page_workspace_binding">工作区绑定</string>
   <string name="assistant_page_workspace_binding_desc">绑定工作区以启用该助手的文件/Shell 工具</string>
+  <string name="assistant_page_open_workspace">打开工作区</string>
   <string name="workspace_no_binding">未绑定</string>
   <string name="workspace_page_title">工作区</string>
   <string name="workspace_page_empty_title">暂无工作区</string>
@@ -1153,6 +1154,14 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="workspace_detail_export">导出</string>
   <string name="workspace_detail_share">分享</string>
   <string name="workspace_detail_export_failed">导出文件失败</string>
+  <string name="workspace_preview_too_large">文件过大，无法在应用内预览</string>
+  <string name="workspace_preview_load_failed">无法安全预览此文件</string>
+  <string name="workspace_preview_unsupported">暂不支持预览此文件类型</string>
+  <string name="workspace_preview_file_type">类型：%1$s</string>
+  <string name="workspace_preview_file_size">大小：%1$s</string>
+  <string name="workspace_preview_opening">正在打开…</string>
+  <string name="workspace_preview_open_with_app">使用其他应用打开</string>
+  <string name="workspace_preview_open_failed">没有可打开此文件的兼容应用</string>
   <string name="workspace_terminal_title">终端</string>
   <string name="workspace_terminal_not_installed">此工作区未安装 Rootfs</string>
   <string name="workspace_terminal_loading">正在加载终端…</string>

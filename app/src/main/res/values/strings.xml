@@ -406,6 +406,7 @@
   <string name="extensions_page_workspace_desc">Sandboxed Linux file area &amp; shell tools for assistants</string>
   <string name="assistant_page_workspace_binding">Workspace Binding</string>
   <string name="assistant_page_workspace_binding_desc">Bind a workspace to enable file/shell tools for this assistant</string>
+  <string name="assistant_page_open_workspace">Open workspace</string>
   <string name="workspace_no_binding">No binding</string>
   <string name="workspace_page_title">Workspaces</string>
   <string name="workspace_page_empty_title">No workspaces yet</string>
@@ -444,6 +445,14 @@
   <string name="workspace_detail_export">Export</string>
   <string name="workspace_detail_share">Share</string>
   <string name="workspace_detail_export_failed">Failed to export file</string>
+  <string name="workspace_preview_too_large">This file is too large for in-app preview</string>
+  <string name="workspace_preview_load_failed">Unable to preview this file safely</string>
+  <string name="workspace_preview_unsupported">Preview is not available for this file type</string>
+  <string name="workspace_preview_file_type">Type: %1$s</string>
+  <string name="workspace_preview_file_size">Size: %1$s</string>
+  <string name="workspace_preview_opening">Opening…</string>
+  <string name="workspace_preview_open_with_app">Open with another app</string>
+  <string name="workspace_preview_open_failed">No compatible app could open this file</string>
   <string name="workspace_terminal_title">Terminal</string>
   <string name="workspace_terminal_not_installed">Rootfs is not installed in this workspace</string>
   <string name="workspace_terminal_loading">Loading terminal…</string>

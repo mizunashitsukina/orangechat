@@ -24,8 +24,10 @@ import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceManager
 import me.rerere.workspace.WorkspaceShellStatus
 import me.rerere.workspace.WorkspaceStorageArea
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.charset.StandardCharsets
 import kotlin.uuid.Uuid
 
 class WorkspaceRepository(
@@ -193,6 +195,19 @@ class WorkspaceRepository(
         manager.fileSize(workspace.root, path, area)
     }
 
+    suspend fun readTextForPreview(
+        id: String,
+        area: WorkspaceStorageArea,
+        path: String,
+    ): String = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found")
+        val size = manager.fileSize(workspace.root, path, area)
+        require(size <= MAX_TEXT_PREVIEW_BYTES) { "File is too large for text preview" }
+        val output = LimitedByteArrayOutputStream(MAX_TEXT_PREVIEW_BYTES.toInt())
+        manager.exportFile(workspace.root, path, area, output)
+        output.toByteArray().toString(StandardCharsets.UTF_8)
+    }
+
     suspend fun exportFile(
         id: String,
         area: WorkspaceStorageArea,
@@ -288,5 +303,24 @@ class WorkspaceRepository(
 
     companion object {
         private const val TAG = "WorkspaceRepository"
+        const val MAX_TEXT_PREVIEW_BYTES = 512L * 1024L
+    }
+}
+
+private class LimitedByteArrayOutputStream(
+    private val maxBytes: Int,
+) : ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE)) {
+    override fun write(value: Int) {
+        requireRemaining(1)
+        super.write(value)
+    }
+
+    override fun write(buffer: ByteArray, offset: Int, length: Int) {
+        requireRemaining(length)
+        super.write(buffer, offset, length)
+    }
+
+    private fun requireRemaining(length: Int) {
+        require(length >= 0 && length <= maxBytes - count) { "File is too large for text preview" }
     }
 }

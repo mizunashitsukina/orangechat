@@ -9,6 +9,7 @@ package me.rerere.rikkahub.ui.components.message
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -47,11 +49,14 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.FileImport
+import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Share08
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
-import me.rerere.workspace.WorkspaceStorageArea
+import me.rerere.rikkahub.ui.context.LocalNavController
+import me.rerere.rikkahub.ui.pages.extensions.workspace.resolveWorkspaceToolFilePath
 import org.koin.compose.koinInject
 import java.io.File
 
@@ -61,8 +66,7 @@ private val WORKSPACE_FILE_TOOL_NAMES = setOf("workspace_write_file", "workspace
 /**
  * 在 assistant 消息内容下方展示被工作区工具写入/编辑的文件 chip 列表。
  *
- * 点击某个 chip 弹出底部面板, 提供「导出」(系统文件选择器保存到本地) 和
- * 「分享」(通过 FileProvider 调起系统分享面板) 两个入口。
+ * 点击文件名直接打开只读预览；尾部菜单保留「导出」和「分享」入口。
  *
  * 仅当消息归属于某个工作区 (assistant.workspaceId != null) 且存在已执行的
  * workspace_write_file/workspace_edit_file 工具调用时才渲染。
@@ -89,6 +93,7 @@ internal fun EditedFilesList(
     if (editedFiles.isEmpty()) return
 
     val context = LocalContext.current
+    val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
     val workspaceRepository: WorkspaceRepository = koinInject()
 
@@ -106,7 +111,7 @@ internal fun EditedFilesList(
             ?: return@rememberLauncherForActivityResult
         scope.launch {
             runCatching {
-                val (area, relativePath) = resolveWorkspacePath(path)
+                val (area, relativePath) = resolveWorkspaceToolFilePath(path)
                 outputStream.use { output ->
                     workspaceRepository.exportFile(workspaceId, area, relativePath, output)
                 }
@@ -120,13 +125,13 @@ internal fun EditedFilesList(
     ) {
         visibleFiles.forEach { path ->
             val fileName = remember(path) { path.substringAfterLast('/') }
+            val resolvedPath = remember(path) { runCatching { resolveWorkspaceToolFilePath(path) }.getOrNull() }
             Surface(
-                onClick = { selectedPath = path },
                 shape = RoundedCornerShape(50),
                 color = MaterialTheme.colorScheme.tertiaryContainer,
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(start = 10.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -140,8 +145,30 @@ internal fun EditedFilesList(
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 200.dp),
+                        modifier = Modifier
+                            .widthIn(max = 200.dp)
+                            .clickable(enabled = resolvedPath != null) {
+                                val target = resolvedPath ?: return@clickable
+                                navController.navigate(
+                                    Screen.WorkspaceFilePreview(
+                                        id = workspaceId,
+                                        area = target.area.name,
+                                        path = target.relativePath,
+                                    )
+                                )
+                            }
+                            .padding(vertical = 6.dp),
                     )
+                    IconButton(
+                        onClick = { selectedPath = path },
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.MoreVertical,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
             }
         }
@@ -210,7 +237,7 @@ internal fun EditedFilesList(
                         selectedPath = null
                         scope.launch {
                             runCatching {
-                                val (area, relativePath) = resolveWorkspacePath(p)
+                                val (area, relativePath) = resolveWorkspaceToolFilePath(p)
                                 val dir = File(context.cacheDir, "workspace_share").apply { mkdirs() }
                                 val file = File(dir, p.substringAfterLast('/'))
                                 file.outputStream().use { output ->
@@ -252,20 +279,5 @@ internal fun EditedFilesList(
                 }
             }
         }
-    }
-}
-
-/**
- * 把工作区工具入参里的 path 解析成 (storage area, 相对路径)。
- *
- * - `/workspace` 或 `/workspace/...` → FILES 区, 去掉 /workspace 前缀
- * - 其它路径 (绝对或相对) → LINUX 区 (rootfs)
- */
-private fun resolveWorkspacePath(path: String): Pair<WorkspaceStorageArea, String> {
-    val trimmed = path.trimEnd('/')
-    return if (trimmed == "/workspace" || trimmed.startsWith("/workspace/")) {
-        WorkspaceStorageArea.FILES to trimmed.removePrefix("/workspace").trimStart('/')
-    } else {
-        WorkspaceStorageArea.LINUX to trimmed.trimStart('/')
     }
 }
