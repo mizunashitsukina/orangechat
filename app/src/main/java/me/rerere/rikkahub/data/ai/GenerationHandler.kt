@@ -50,6 +50,8 @@ import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.onGenerationFinish
 import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.ai.transformers.visualTransforms
+import me.rerere.rikkahub.data.ai.mcp.ToolNameResolution
+import me.rerere.rikkahub.data.ai.mcp.resolveToolByName
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
 import me.rerere.rikkahub.data.ai.tools.buildWriteFilesTool
 import me.rerere.rikkahub.data.datastore.Settings
@@ -98,6 +100,8 @@ class GenerationHandler(
         assistant: Assistant,
         memories: List<AssistantMemory>? = null,
         tools: List<Tool> = emptyList(),
+        legacyMcpToolAliases: Map<String, Tool> = emptyMap(),
+        legacyMcpToolRejections: Map<String, String> = emptyMap(),
         maxSteps: Int = 256,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
         conversationSystemPrompt: String? = null,
@@ -213,7 +217,16 @@ class GenerationHandler(
                 // Check for tools that need approval
                 var hasPendingApproval = false
                 val updatedTools = tools.map { tool ->
-                    val toolDef = toolsInternal.find { it.name == tool.toolName }
+                    val toolDef = when (val resolution = resolveToolByName(
+                        requestedName = tool.toolName,
+                        registeredTools = toolsInternal,
+                        nameOf = Tool::name,
+                        legacyAliases = legacyMcpToolAliases,
+                        legacyRejections = legacyMcpToolRejections,
+                    )) {
+                        is ToolNameResolution.Resolved -> resolution.value
+                        is ToolNameResolution.Rejected -> null
+                    }
                     when {
                         // Auto-approve everything (lazy mode) -> skip approval
                         settings.autoApproveAllTools -> tool
@@ -300,8 +313,16 @@ class GenerationHandler(
                     else -> {
                         // Auto or Approved - execute the tool
                         runCatching {
-                            val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
-                                ?: error("Tool ${tool.toolName} not found")
+                            val toolDef = when (val resolution = resolveToolByName(
+                                requestedName = tool.toolName,
+                                registeredTools = toolsInternal,
+                                nameOf = Tool::name,
+                                legacyAliases = legacyMcpToolAliases,
+                                legacyRejections = legacyMcpToolRejections,
+                            )) {
+                                is ToolNameResolution.Resolved -> resolution.value
+                                is ToolNameResolution.Rejected -> error(resolution.safeMessage)
+                            }
                             val args = runCatching {
                                 json.parseToJsonElement(tool.input.ifBlank { "{}" })
                             }.getOrElse {
