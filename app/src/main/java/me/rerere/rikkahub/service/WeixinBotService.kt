@@ -21,7 +21,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.jsonObject
@@ -29,7 +28,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
-import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.datastore.WechatBotSetting
+import me.rerere.rikkahub.data.service.FixedConversationBinding
+import me.rerere.rikkahub.data.service.resolveFixedConversationBinding
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.weixin.WeixinBotClient
 import me.rerere.rikkahub.data.weixin.WeixinMessageType
@@ -37,12 +38,11 @@ import me.rerere.rikkahub.data.weixin.extractInboundText
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import org.koin.core.component.inject
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.uuid.Uuid
 
 /**
  * 微信 Bot 后台长轮询服务.
  *
- * 设计: 微信 bot 是某个助手的"微信消息通道". 收到入站文字消息后, 复用助手最近的会话,
+ * 设计: 微信 bot 是某个助手的"微信消息通道". 收到入站文字消息后, 只使用用户绑定的固定会话,
  * 调 chatService.sendMessage 触发 AI, 等生成完成, 把回复发回微信.
  *
  * 模板参考: ProactiveMessageTriggerService (KoinComponent 注入 + foreground service),
@@ -89,6 +89,19 @@ class WeixinBotService : Service(), org.koin.core.component.KoinComponent {
                     Log.w(TAG, "disabled or no token, stopping service")
                     stopSelf(); return
                 }
+                val startupBinding = resolveFixedConversationBinding(
+                    configuredConversationId = botSetting.conversationId,
+                    configuredAssistantId = botSetting.assistantId,
+                    loadConversation = conversationRepository::getConversationById,
+                )
+                if (startupBinding !is FixedConversationBinding.Valid ||
+                    settings.assistants.none { it.id == startupBinding.conversation.assistantId }
+                ) {
+                    Log.w(TAG, "polling stopped: fixed conversation binding is invalid")
+                    notifyBindingInvalid()
+                    stopSelf()
+                    return
+                }
 
                 val result = client.getUpdates(
                     token = botSetting.botToken,
@@ -111,10 +124,10 @@ class WeixinBotService : Service(), org.koin.core.component.KoinComponent {
                     }
 
                     val text = extractInboundText(msg.jsonObject)
-                    Log.i(TAG, "inbound from=$fromUserId text=${text.take(80)}")
+                    Log.i(TAG, "inbound message received")
 
                     // 转给 AI 并等待回复
-                    val reply = handleInboundMessage(text, settings.wechatBotSetting.assistantId)
+                    val reply = handleInboundMessage(text, settings.wechatBotSetting) ?: continue
                     // 发回微信
                     client.sendTextMessage(
                         token = botSetting.botToken,
@@ -147,47 +160,52 @@ class WeixinBotService : Service(), org.koin.core.component.KoinComponent {
     /**
      * 把一条微信消息转给关联的助手处理, 等待 AI 生成完成, 返回回复文本.
      *
-     * 复用助手最近会话 (模式同 ProactiveMessageTriggerService:484). 留空 assistantId 用当前助手.
-     * 走 chatService.sendMessage (fire-and-forget) + 监听 generationDoneFlow 等回复.
+     * 只使用设置中绑定的固定会话。绑定缺失、已删除或助手不匹配时安全停止，不回退到其他会话。
      */
-    private suspend fun handleInboundMessage(text: String, assistantIdStr: String): String {
+    private suspend fun handleInboundMessage(text: String, botSetting: WechatBotSetting): String? {
         val settings = settingsStore.settingsFlow.first()
-        val assistant = if (assistantIdStr.isBlank()) {
-            settings.getCurrentAssistant()
-        } else {
-            settings.assistants.find { it.id.toString() == assistantIdStr }
-                ?: settings.getCurrentAssistant()
+        val binding = resolveFixedConversationBinding(
+            configuredConversationId = botSetting.conversationId,
+            configuredAssistantId = botSetting.assistantId,
+            loadConversation = conversationRepository::getConversationById,
+        )
+        if (binding !is FixedConversationBinding.Valid ||
+            settings.assistants.none { it.id == binding.conversation.assistantId }
+        ) {
+            Log.w(TAG, "inbound message skipped: fixed conversation binding is invalid")
+            notifyBindingInvalid()
+            return null
         }
-
-        // 复用助手最近一个会话; 没有就新建一个固定 Uuid
-        val recent = conversationRepository.getRecentConversations(assistant.id, limit = 1)
-        val conversationId = recent.firstOrNull()?.id ?: Uuid.random()
+        val conversationId = binding.conversationId
 
         // 同步会话到 ChatService 的 session 缓存, 防止流式更新覆盖历史
         chatService.addConversationReference(conversationId)
+        try {
+            chatService.hydrateFixedConversation(binding.conversation)
+            chatService.sendMessage(
+                conversationId = conversationId,
+                content = listOf(UIMessagePart.Text(text)),
+                answer = true,
+            )
 
-        // 触发 AI 生成 (fire-and-forget)
-        chatService.sendMessage(
-            conversationId = conversationId,
-            content = listOf(UIMessagePart.Text(text)),
-            answer = true,
-        )
+            // 等待这次会话的生成完成事件 (最多 120s), 然后取最后一条 assistant 消息的文本
+            val success = withTimeoutOrNull(REPLY_TIMEOUT_MS) {
+                chatService.generationDoneFlow.first { it == conversationId }
+            }
+            if (success == null) {
+                return "（思考超时, 请稍后再试）"
+            }
 
-        // 等待这次会话的生成完成事件 (最多 120s), 然后取最后一条 assistant 消息的文本
-        val success = withTimeoutOrNull(REPLY_TIMEOUT_MS) {
-            chatService.generationDoneFlow.first { it == conversationId }
+            val updatedConversation = chatService.getConversationFlow(conversationId).value
+            val lastAssistant = updatedConversation.currentMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
+            val replyText = lastAssistant?.parts
+                ?.filterIsInstance<UIMessagePart.Text>()
+                ?.joinToString("\n") { it.text }
+                ?.trim()
+            return replyText?.takeIf { it.isNotBlank() } ?: "（无回复）"
+        } finally {
+            chatService.removeConversationReference(conversationId)
         }
-        if (success == null) {
-            return "（思考超时, 请稍后再试）"
-        }
-
-        val conversation = chatService.getConversationFlow(conversationId).value
-        val lastAssistant = conversation.currentMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
-        val replyText = lastAssistant?.parts
-            ?.filterIsInstance<UIMessagePart.Text>()
-            ?.joinToString("\n") { it.text }
-            ?.trim()
-        return replyText?.takeIf { it.isNotBlank() } ?: "（无回复）"
     }
 
     private fun startForegroundCompat() {
@@ -222,6 +240,20 @@ class WeixinBotService : Service(), org.koin.core.component.KoinComponent {
                 .build()
             val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
             nm.notify(NOTIFICATION_ID + 1, notification)
+        } catch (_: Exception) {}
+    }
+
+    private fun notifyBindingInvalid() {
+        try {
+            val notification = NotificationCompat.Builder(this, CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID)
+                .setContentTitle("微信 Bot 已暂停")
+                .setContentText("绑定对话无效，请到微信 Bot 设置中重新绑定")
+                .setSmallIcon(me.rerere.rikkahub.R.drawable.small_icon)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .build()
+            val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+            manager.notify(NOTIFICATION_ID + 2, notification)
         } catch (_: Exception) {}
     }
 

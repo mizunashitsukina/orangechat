@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -27,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -35,23 +37,82 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.RiskConfirmDialog
-import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.data.service.ProactiveMessageService
 import me.rerere.rikkahub.data.service.ProactiveMessageWorker
 import org.koin.compose.koinInject
+import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingProactiveMessagePage(vm: SettingVM = koinInject()) {
     val context = LocalContext.current
-    val navController = LocalNavController.current
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val conversationRepository: ConversationRepository = koinInject()
+    val scope = rememberCoroutineScope()
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
     var showProactiveRiskDialog by remember { mutableStateOf(false) }
     var showAggressiveRiskDialog by remember { mutableStateOf(false) }
+    var showConversationDialog by remember { mutableStateOf(false) }
+    var showAssistantDialog by remember { mutableStateOf(false) }
+    var isCreatingConversation by remember { mutableStateOf(false) }
+    val conversations by remember(conversationRepository) {
+        conversationRepository.searchConversations("")
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val proactiveSetting = settings.proactiveMessageSetting
+    val boundConversation = conversations.firstOrNull { it.id.toString() == proactiveSetting.conversationId }
+    val boundAssistant = settings.assistants.firstOrNull { it.id.toString() == proactiveSetting.assistantId }
+    val bindingIsValid = boundConversation != null &&
+        boundConversation.assistantId.toString() == proactiveSetting.assistantId
+
+    if (showConversationDialog) {
+        ConversationBindingDialog(
+            conversations = conversations,
+            onSelect = { conversation ->
+                val newSetting = proactiveSetting.copy(
+                    conversationId = conversation.id.toString(),
+                    assistantId = conversation.assistantId.toString(),
+                )
+                vm.updateSettings(
+                    settings.copy(
+                        proactiveMessageSetting = newSetting
+                    )
+                )
+                if (newSetting.enabled) {
+                    ProactiveMessageService.scheduleNext(context, newSetting)
+                }
+                showConversationDialog = false
+            },
+            onDismiss = { showConversationDialog = false },
+        )
+    }
+
+    if (showAssistantDialog) {
+        AssistantBindingDialog(
+            assistants = settings.assistants,
+            onSelect = { assistant ->
+                vm.updateSettings(
+                    settings.copy(
+                        proactiveMessageSetting = proactiveSetting.copy(
+                            enabled = false,
+                            aggressiveModeEnabled = false,
+                            assistantId = assistant.id.toString(),
+                            conversationId = "",
+                        )
+                    )
+                )
+                ProactiveMessageService.cancel(context)
+                me.rerere.rikkahub.data.service.DeviceEventAiTriggerService.stop(context)
+                showAssistantDialog = false
+            },
+            onDismiss = { showAssistantDialog = false },
+        )
+    }
 
     if (showProactiveRiskDialog) {
         RiskConfirmDialog(
@@ -106,11 +167,74 @@ fun SettingProactiveMessagePage(vm: SettingVM = koinInject()) {
             item {
                 CardGroup {
                     item(
+                        headlineContent = { Text("关联助手") },
+                        supportingContent = {
+                            Text(boundAssistant?.name?.ifBlank { "未命名助手" } ?: "未选择助手")
+                        },
+                        onClick = { showAssistantDialog = true },
+                    )
+                    item(
+                        headlineContent = { Text("绑定对话") },
+                        supportingContent = {
+                            Text(
+                                when {
+                                    proactiveSetting.conversationId.isBlank() -> "未绑定，主动消息不会生成"
+                                    boundConversation == null -> "原绑定对话已删除，请重新绑定"
+                                    !bindingIsValid -> "绑定助手与对话不一致，请重新绑定"
+                                    else -> boundConversation.title.ifBlank { "未命名对话" }
+                                }
+                            )
+                        },
+                        onClick = { showConversationDialog = true },
+                    )
+                    item(
+                        headlineContent = { Text("创建主动消息专用对话") },
+                        supportingContent = { Text("普通主动消息与激进模式共用这条绑定对话") },
+                        trailingContent = {
+                            FilledTonalButton(
+                                enabled = !isCreatingConversation,
+                                onClick = {
+                                    val assistant = boundAssistant ?: settings.getCurrentAssistant()
+                                    scope.launch {
+                                        isCreatingConversation = true
+                                        try {
+                                            val conversation = Conversation(
+                                                assistantId = assistant.id,
+                                                title = "主动消息专用",
+                                                messageNodes = emptyList(),
+                                            )
+                                            conversationRepository.insertConversation(conversation)
+                                            val newSetting = proactiveSetting.copy(
+                                                assistantId = assistant.id.toString(),
+                                                conversationId = conversation.id.toString(),
+                                            )
+                                            vm.updateSettings(
+                                                settings.copy(
+                                                    proactiveMessageSetting = newSetting
+                                                )
+                                            )
+                                            if (newSetting.enabled) {
+                                                ProactiveMessageService.scheduleNext(context, newSetting)
+                                            }
+                                        } finally {
+                                            isCreatingConversation = false
+                                        }
+                                    }
+                                },
+                            ) { Text("创建") }
+                        },
+                    )
+                }
+            }
+            item {
+                CardGroup {
+                    item(
                         headlineContent = { Text("启用主动消息") },
                         supportingContent = { Text("开启后AI立即主动发一条消息，之后按设定间隔循环") },
                         trailingContent = {
                             Switch(
                                 checked = settings.proactiveMessageSetting.enabled,
+                                enabled = settings.proactiveMessageSetting.enabled || bindingIsValid,
                                 onCheckedChange = { enabled ->
                                     if (enabled) {
                                         showProactiveRiskDialog = true
@@ -260,6 +384,7 @@ fun SettingProactiveMessagePage(vm: SettingVM = koinInject()) {
                         trailingContent = {
                             Switch(
                                 checked = settings.proactiveMessageSetting.aggressiveModeEnabled,
+                                enabled = settings.proactiveMessageSetting.aggressiveModeEnabled || bindingIsValid,
                                 onCheckedChange = { enabled ->
                                     if (enabled) {
                                         showAggressiveRiskDialog = true
