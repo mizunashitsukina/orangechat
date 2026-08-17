@@ -173,8 +173,8 @@ jobs:
           for apk in "${apks[@]}"; do
             "$apksigner" verify "$apk"
             fingerprint="$(
-              "$apksigner" verify --print-certs "$apk" |
-                sed -n 's/^Signer #1 certificate SHA-256 digest: //p' |
+              "$apksigner" verify --print-certs "$apk" 2>&1 |
+                sed -n 's/.*certificate SHA-256 digest:[[:space:]]*//p' |
                 head -n 1
             )"
             application_id="$("$aapt" dump badging "$apk" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
