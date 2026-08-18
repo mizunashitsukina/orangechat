@@ -131,7 +131,8 @@ jobs:
             --tests "me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigratorTest" \
             --tests "me.rerere.rikkahub.ui.pages.backup.tabs.BackupImportErrorMappingTest" \
             --tests "me.rerere.rikkahub.data.ai.mcp.LegacyMcpToolCompatibilityTest" \
-            --tests "me.rerere.rikkahub.data.service.FixedConversationBindingTest"
+            --tests "me.rerere.rikkahub.data.service.FixedConversationBindingTest" \
+            --tests "me.rerere.rikkahub.data.service.ProactiveRequestLayoutTest"
 
       - name: Assemble Debug APK
         env:

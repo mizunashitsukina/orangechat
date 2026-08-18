@@ -24,8 +24,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import androidx.core.app.NotificationCompat
 import android.os.Build
 import me.rerere.ai.core.MessageRole
@@ -210,28 +208,6 @@ class ProactiveMessageService : KoinComponent {
         val sb = StringBuilder()
         sb.appendLine("[主动消息上下文]")
 
-        // Time since last chat
-        try {
-            val lastMessageTime = getLastMessageTime()
-            if (lastMessageTime != null) {
-                val nowMs = java.lang.System.currentTimeMillis()
-                val lastMs = lastMessageTime.toEpochMilliseconds()
-                val diffMs = nowMs - lastMs
-                val duration = diffMs.milliseconds
-                val minutesAgo = duration.inWholeMinutes
-                val hoursAgo = duration.inWholeHours
-                when {
-                    hoursAgo > 24 -> sb.appendLine("距离上次聊天: ${hoursAgo / 24}天${hoursAgo % 24}小时")
-                    hoursAgo > 0 -> sb.appendLine("距离上次聊天: ${hoursAgo}小时${minutesAgo % 60}分钟")
-                    else -> sb.appendLine("距离上次聊天: ${minutesAgo}分钟")
-                }
-            } else {
-                sb.appendLine("距离上次聊天: 很久没有聊天了")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Proactive context operation failed: ${e.javaClass.simpleName}")
-        }
-
         // Current time
         val currentTime = java.lang.System.currentTimeMillis()
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
@@ -327,19 +303,6 @@ class ProactiveMessageService : KoinComponent {
 
         // 健康状态（Gadgetbridge）- 跳过，AI可通过工具自行查询
 
-        sb.appendLine()
-        sb.appendLine("请根据以上上下文，以自然、关心、有趣的方式主动给用户发一条消息。")
-        sb.appendLine()
-        sb.appendLine("重要规则：")
-        sb.appendLine("- 绝对不要复述上一轮的对话内容，要发新的话题或新的关心")
-        sb.appendLine("- 如果上一轮已经说过类似的话，这次换一个完全不同的角度")
-        sb.appendLine("- 不要提及你是在定时发消息，要像自然想起对方一样")
-        sb.appendLine("- 绝对不要提及任何数据来源、工具使用、传感器数据、位置服务、应用使用统计等技术细节")
-        sb.appendLine("- 不要说\"根据xxx\"、\"我注意到xxx数据\"之类暴露信息来源的话")
-        sb.appendLine("- 直接以朋友聊天的语气开口，就像你突然想到了什么想跟对方说")
-        sb.appendLine("- 不要使用任何XML标签、思考标记或特殊格式，只输出纯文本的消息内容")
-        sb.appendLine("- 不要调用任何工具或函数，只输出纯文本回复")
-        sb.appendLine("- 不要输出思考过程、推理过程或内部独白，只输出你想对用户说的话")
         return sb.toString()
     }
 
@@ -578,19 +541,25 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     }
                 )
 
-                // 构建系统提示词（包含记忆 + 上下文，都放在最后面避免被网关淹没）
-                val systemPrompt = buildSystemPrompt(assistant, settings, idleMinutes, proactiveSetting.jumpIdleThresholdMinutes, isFromDeviceEvent, if (isFromDeviceEvent) deviceEventContext else contextStr)
+                val stableMemories = loadStableMemories(assistant)
+                val requestLayout = buildProactiveRequestLayout(
+                    assistantSystemPrompt = assistant.systemPrompt,
+                    stableMemories = stableMemories,
+                    historyMessages = historyMessages,
+                    idleMinutes = idleMinutes,
+                    dynamicContext = contextStr,
+                    mode = if (isFromDeviceEvent) {
+                        ProactiveTriggerMode.DEVICE_EVENT
+                    } else {
+                        ProactiveTriggerMode.SCHEDULED
+                    },
+                )
 
-                // user message 只放简短指令（上下文已在系统提示词中）
+                // Dynamic trigger data is intentionally the final user turn so the system/history prefix
+                // stays cacheable.
                 val userMessage = UIMessage(
                     role = MessageRole.USER,
-                    parts = listOf(UIMessagePart.Text(
-                        if (isFromDeviceEvent) {
-                            "请根据以上用户动向决定是否发消息。没什么好说的就回复 [PASS]。"
-                        } else {
-                            "请根据以上上下文决定是否发消息。没什么好说的就回复 [PASS] 即可，不要强行找话题。"
-                        }
-                    ))
+                    parts = listOf(UIMessagePart.Text(requestLayout.dynamicUserPrompt)),
                 )
 
                 // 应用输入转换器
@@ -602,17 +571,9 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     settings = settings
                 ).first()
 
-                // 组合完整消息列表：System + History + User Context
-                // 合并相邻同角色消息（包括 history 末尾与合成 User 消息之间可能出现的 USER-USER 相邻），避免 400
-                val messages = mergeAdjacentSameRoleMessages(
-                    buildList {
-                        add(UIMessage(
-                            role = MessageRole.SYSTEM,
-                            parts = listOf(UIMessagePart.Text(systemPrompt))
-                        ))
-                        addAll(historyMessages)
-                        add(processedUserMessage)
-                    }
+                val messages = assembleProactiveRequestMessages(
+                    layout = requestLayout,
+                    processedDynamicUserMessage = processedUserMessage,
                 )
 
                 // 直接调用 AI API 生成消息
@@ -844,72 +805,14 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
         return START_NOT_STICKY
     }
 
-    /**
-     * 构建系统提示词，包含记忆等内容
-     * isFromDeviceEvent: 是否由激进模式设备事件触发
-     */
-    private suspend fun buildSystemPrompt(assistant: Assistant, settings: Settings, idleMinutes: Int = 0, jumpThreshold: Int = 120, isFromDeviceEvent: Boolean = false, deviceEventContext: String? = null): String {
-        return buildString {
-            // 基础系统提示词
-            val effectiveSystemPrompt = if (assistant.allowConversationSystemPrompt) {
-                assistant.systemPrompt
-            } else {
-                assistant.systemPrompt
-            }
-            if (effectiveSystemPrompt.isNotBlank()) {
-                append(effectiveSystemPrompt)
-            }
-
-            // 记忆（设备事件上下文移到最后面，避免被网关注入的内容淹没）
-            if (assistant.enableMemory) {
-                val memories = if (assistant.useGlobalMemory) {
-                    memoryRepository.getGlobalMemories()
-                } else {
-                    memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-                }
-                if (memories.isNotEmpty()) {
-                    appendLine()
-                    appendLine()
-                    appendLine("## 记忆")
-                    memories.forEach { memory ->
-                        appendLine("- ${memory.content}")
-                    }
-                }
-            }
-
-            if (isFromDeviceEvent) {
-                // 激进模式设备事件触发的专用提示词 + 设备事件上下文（放在最后面，网关追加内容之后模型最后看到的就是这个）
-                appendLine()
-                appendLine()
-                appendLine("## ⚠️ 当前触发原因：用户手机动向（设备事件触发）")
-                appendLine("你是因为检测到用户的手机操作动向（切换应用/亮屏锁屏/回桌面）而被触发的。")
-                appendLine("请特别注意：这是设备事件触发，不是定时主动消息。根据用户的手机操作动向来决定是否发消息。")
-                appendLine("绝对不要复述上一轮的对话内容，要发新的话题或新的关心。")
-                appendLine("请根据用户的动向，自然地决定是否主动发一条消息。距离用户上次回复已过去 $idleMinutes 分钟。")
-                appendLine("如果你觉得现在没什么好说的，或者没什么有趣的话题，请只回复 [PASS] 即可。")
-                appendLine("[JUMP] 标记不会展示给用户，仅用于触发屏幕跳转。")
-                // 直接注入设备事件上下文
-                if (!deviceEventContext.isNullOrBlank()) {
-                    appendLine()
-                    appendLine(deviceEventContext)
-                }
-            } else {
-                // 常规主动消息：上下文也注入系统提示词最后面（和激进模式一样）
-                appendLine()
-                appendLine()
-                appendLine("## 主动消息触发（定时触发）")
-                appendLine("距离用户上次回复已过去 $idleMinutes 分钟。")
-                appendLine("这是定时触发的主动消息，不是设备事件触发。")
-                appendLine("绝对不要复述上一轮的对话内容，要发新的话题或新的关心。")
-                appendLine("如果你觉得现在没什么好说的，或者没什么有趣的话题，请只回复 [PASS] 即可。")
-                appendLine("[JUMP] 标记不会展示给用户，仅用于触发屏幕跳转。")
-                // 注入完整上下文（定位、前台app、app使用、通知、电量、健康等）
-                if (!deviceEventContext.isNullOrBlank()) {
-                    appendLine()
-                    appendLine(deviceEventContext)
-                }
-            }
+    private suspend fun loadStableMemories(assistant: Assistant): List<String> {
+        if (!assistant.enableMemory) return emptyList()
+        val memories = if (assistant.useGlobalMemory) {
+            memoryRepository.getGlobalMemories()
+        } else {
+            memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
         }
+        return memories.map { it.content }
     }
 
     /**
