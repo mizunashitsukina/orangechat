@@ -9,6 +9,14 @@ package me.rerere.rikkahub.data.service
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.appendProactiveDynamicUser
+import me.rerere.rikkahub.data.model.isHiddenProactiveMessage
+import me.rerere.rikkahub.data.model.markAsProactiveDynamicUser
+import me.rerere.rikkahub.data.model.markAsProactivePassAssistant
+import me.rerere.rikkahub.data.model.rollbackProactiveDynamicUser
+import me.rerere.rikkahub.data.model.takeLastWithProactivePairs
+import me.rerere.rikkahub.data.model.toMessageNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -24,6 +32,58 @@ class ProactiveRequestLayoutTest {
     @Test
     fun deviceEventRequestsKeepSystemAndHistoryStable() {
         assertOnlyFinalUserChanges(ProactiveTriggerMode.DEVICE_EVENT)
+    }
+
+    @Test
+    fun normalReplyPersistsAfterTheInternalDynamicUser() {
+        val dynamicUser = message(MessageRole.USER, "dynamic").markAsProactiveDynamicUser()
+        val assistant = message(MessageRole.ASSISTANT, "reply")
+        val conversation = conversation(listOf(message(MessageRole.USER, "old")))
+            .appendProactiveDynamicUser(dynamicUser)
+            .copy(messageNodes = conversationNodes(
+                message(MessageRole.USER, "old"), dynamicUser, assistant
+            ))
+
+        assertEquals(listOf("old", "dynamic", "reply"), conversation.currentMessages.map(::text))
+        assertTrue(dynamicUser.isHiddenProactiveMessage())
+        assertFalse(assistant.isHiddenProactiveMessage())
+        assertEquals(
+            listOf("dynamic", "reply"),
+            conversation.currentMessages.takeLastWithProactivePairs(1).map(::text),
+        )
+    }
+
+    @Test
+    fun passReplyRemainsPairedAndBothInternalMessagesAreHidden() {
+        val dynamicUser = message(MessageRole.USER, "dynamic").markAsProactiveDynamicUser()
+        val pass = message(MessageRole.ASSISTANT, "[PASS]").markAsProactivePassAssistant()
+        val history = listOf(message(MessageRole.USER, "old"), dynamicUser, pass)
+
+        assertTrue(dynamicUser.isHiddenProactiveMessage())
+        assertTrue(pass.isHiddenProactiveMessage())
+        assertEquals(listOf("dynamic", "[PASS]"), history.takeLastWithProactivePairs(1).map(::text))
+    }
+
+    @Test
+    fun failureRollbackRemovesTheIncompleteInternalTurnOnly() {
+        val original = message(MessageRole.USER, "old")
+        val dynamicUser = message(MessageRole.USER, "dynamic").markAsProactiveDynamicUser()
+        val partialAssistant = message(MessageRole.ASSISTANT, "partial")
+        val pending = conversation(listOf(original)).appendProactiveDynamicUser(dynamicUser).copy(
+            messageNodes = conversationNodes(original, dynamicUser, partialAssistant),
+        )
+
+        val rolledBack = pending.rollbackProactiveDynamicUser(dynamicUser.id)
+
+        assertEquals(listOf("old"), rolledBack.currentMessages.map(::text))
+    }
+
+    @Test
+    fun proactiveToolNamesHaveStableOrdering() {
+        val tools = listOf("z_plugin", "a_mcp", "m_system").map { name ->
+            me.rerere.ai.core.Tool(name = name, description = name, execute = { emptyList() })
+        }
+        assertEquals(listOf("a_mcp", "m_system", "z_plugin"), stabilizeProactiveTools(tools).map { it.name })
     }
 
     private fun assertOnlyFinalUserChanges(mode: ProactiveTriggerMode) {
@@ -121,4 +181,15 @@ class ProactiveRequestLayoutTest {
     private fun providerPayload(messages: List<UIMessage>) = messages.map { message ->
         message.role to message.parts
     }
+
+    private fun conversation(messages: List<UIMessage>) = Conversation(
+        assistantId = kotlin.uuid.Uuid.random(),
+        messageNodes = conversationNodes(*messages.toTypedArray()),
+    )
+
+    private fun conversationNodes(vararg messages: UIMessage) = messages.map { it.toMessageNode() }
+
+    private fun text(message: UIMessage) = message.parts
+        .filterIsInstance<UIMessagePart.Text>()
+        .joinToString("") { it.text }
 }

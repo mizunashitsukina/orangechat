@@ -38,7 +38,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.ai.ui.handleMessageChunk
-import me.rerere.ai.ui.limitContext
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
@@ -72,6 +71,11 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.appendProactiveDynamicUser
+import me.rerere.rikkahub.data.model.markAsProactiveDynamicUser
+import me.rerere.rikkahub.data.model.markAsProactivePassAssistant
+import me.rerere.rikkahub.data.model.rollbackProactiveDynamicUser
+import me.rerere.rikkahub.data.model.takeLastWithProactivePairs
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.model.toMessageNode
 import me.rerere.rikkahub.data.repository.ConversationRepository
@@ -432,6 +436,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
 
         CoroutineScope(Dispatchers.IO).launch {
             var conversationId: kotlin.uuid.Uuid? = null
+            var pendingInternalUserId: Uuid? = null
             try {
                 val settings = settingsStore.settingsFlow.first()
                 val proactiveSetting = settings.proactiveMessageSetting
@@ -534,11 +539,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
 
                 // 获取历史消息（先过滤掉悬空的工具调用消息，避免 tool_use 结构不完整触发 400）
                 val historyMessages = filterInvalidToolMessages(
-                    conversation.currentMessages.let {
-                        if (assistant.contextMessageSize > 0) {
-                            it.takeLast(assistant.contextMessageSize)
-                        } else it
-                    }
+                    conversation.currentMessages.takeLastWithProactivePairs(assistant.contextMessageSize)
                 )
 
                 val stableMemories = loadStableMemories(assistant)
@@ -569,7 +570,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     model = model,
                     assistant = assistant,
                     settings = settings
-                ).first()
+                ).first().markAsProactiveDynamicUser()
 
                 val messages = assembleProactiveRequestMessages(
                     layout = requestLayout,
@@ -617,6 +618,11 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     if (!hasSchema) Log.w(TAG, "Tool schema validation failed")
                 }
 
+                // Persist the internal dynamic USER before the outbound call. This makes the next
+                // request reuse the complete USER -> ASSISTANT turn instead of rebuilding a new prefix.
+                appendProactiveDynamicUser(conversationId, processedUserMessage)
+                pendingInternalUserId = processedUserMessage.id
+
                 // 执行生成，支持工具调用
                 val (finalMessages, _, hasJumpFlag) = generateWithTools(
                     conversationId = conversationId,
@@ -631,7 +637,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 )
 
                 // 提取AI消息
-                val aiMessage = finalMessages.lastOrNull() ?: UIMessage(
+                var aiMessage = finalMessages.lastOrNull() ?: UIMessage(
                     role = MessageRole.ASSISTANT,
                     parts = emptyList()
                 )
@@ -648,37 +654,34 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                     val cleanedAiMessage = aiMessage.copy(
                         parts = aiMessage.parts.map { part ->
                             if (part is UIMessagePart.Text) {
-                                UIMessagePart.Text(part.text.replace("\\[JUMP]".toRegex(RegexOption.IGNORE_CASE), "").trim())
+                                part.copy(text = part.text.replace("\\[JUMP]".toRegex(RegexOption.IGNORE_CASE), "").trim())
                             } else {
                                 part
                             }
                         }
                     )
+                    aiMessage = cleanedAiMessage
                     updateOrAppendAiMessage(conversationId, cleanedAiMessage)
                 }
 
                 Log.d(TAG, "AI operation completed: provider=${providerSetting.javaClass.simpleName}, operation=streamText")
 
-                if (replyText.isBlank() || rawText.contains("[PASS]")) {
-                    // AI 选择跳过，移除本次生成的 aiMessage node（基于 id 匹配，不误删历史）
+                if (replyText.isBlank() || rawText.contains("[PASS]", ignoreCase = true)) {
+                    // PASS remains in history as an internal assistant turn so the provider can
+                    // reuse the complete cached prefix. It is hidden only by the chat renderer.
                     Log.d(ProactiveMessageService.TAG, "AI chose to skip proactive message")
-                    val aiId = aiMessage.id
-                    val session = chatService.getOrCreateSession(conversationId)
-                    session.saveMutex.withLock {
-                        val conv = chatService.getConversationFlow(conversationId).value
-                        chatService.updateConversation(
-                            conversationId,
-                            conv.copy(
-                                messageNodes = conv.messageNodes.filterNot { node ->
-                                    node.messages.any { it.id == aiId }
-                                }
-                            )
-                        )
-                        chatService.saveConversation(conversationId, chatService.getConversationFlow(conversationId).value)
-                    }
+                    val passMessage = if (replyText.isBlank()) {
+                        aiMessage.copy(parts = listOf(UIMessagePart.Text("[PASS]")))
+                    } else {
+                        aiMessage
+                    }.markAsProactivePassAssistant()
+                    updateOrAppendAiMessage(conversationId, passMessage)
+                    saveProactiveMessage(conversationId)
+                    pendingInternalUserId = null
                 } else {
                     // 有效回复：session 里已有 aiMessage（流式过程已追加），持久化并发通知
                     saveProactiveMessage(conversationId)
+                    pendingInternalUserId = null
                     // 同步保存 AI 主动消息 / 激进模式回复到外置记忆库（Supabase）
                     // 保证日记总结（DiarySummaryService 只读 Supabase chat_messages 表）和记忆召回能看到这部分内容
                     try {
@@ -744,6 +747,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 // 注意 catch 顺序：CancellationException 必须在 Exception 之前，否则被泛化分支提前吃掉。
                 // 重新抛出后 finally 块仍会正常执行（scheduleNext 已用 NonCancellable 保护）。
                 Log.d(ProactiveMessageService.TAG, "Proactive generation cancelled")
+                rollbackIncompleteProactiveTurn(conversationId, pendingInternalUserId)
                 throw e
             } catch (e: Exception) {
                 Log.e(ProactiveMessageService.TAG, "Proactive AI operation failed: ${e.javaClass.simpleName}")
@@ -751,6 +755,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
                 if (cause != null) {
                     Log.e(ProactiveMessageService.TAG, "Proactive AI underlying error: ${cause.javaClass.simpleName}")
                 }
+                rollbackIncompleteProactiveTurn(conversationId, pendingInternalUserId)
                 // 清理本次触发中流式写入的不完整/错误 AI 消息, 防止它们污染历史导致下一轮请求失败
                 conversationId?.let { cid ->
                     try {
@@ -836,6 +841,33 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
         return conversationId
     }
 
+    private suspend fun appendProactiveDynamicUser(conversationId: Uuid, message: UIMessage) {
+        val session = chatService.getOrCreateSession(conversationId)
+        session.saveMutex.withLock {
+            val updated = chatService.getConversationFlow(conversationId).value
+                .appendProactiveDynamicUser(message)
+            chatService.updateConversation(conversationId, updated)
+            chatService.saveConversation(conversationId, updated)
+        }
+    }
+
+    private suspend fun rollbackIncompleteProactiveTurn(conversationId: Uuid?, userMessageId: Uuid?) {
+        if (conversationId == null || userMessageId == null) return
+        withContext(NonCancellable) {
+            val session = chatService.getOrCreateSession(conversationId)
+            session.saveMutex.withLock {
+                val current = chatService.getConversationFlow(conversationId).value
+                val rolledBack = current.rollbackProactiveDynamicUser(userMessageId)
+                if (rolledBack !== current) {
+                    // The generation claim prevents unrelated chat writes during this operation.
+                    // Drop the internal USER and any partial assistant/tool nodes appended after it.
+                    chatService.updateConversation(conversationId, rolledBack)
+                    chatService.saveConversation(conversationId, rolledBack)
+                }
+            }
+        }
+    }
+
     private fun showProactiveNotification(
         conversationId: kotlin.uuid.Uuid,
         senderName: String,
@@ -884,7 +916,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
      * 避免工具过多导致请求体过大触发 API 400。
      */
     private suspend fun buildTools(settings: Settings, assistant: Assistant, model: Model): List<Tool> {
-        return buildList {
+        return stabilizeProactiveTools(buildList {
             // 本地工具（助手已启用的）
             addAll(localTools.getTools(assistant.localTools))
 
@@ -912,7 +944,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
 
             // 插件工具
             addAll(pluginToolProvider.getTools())
-        }
+        })
     }
 
     /**

@@ -358,7 +358,7 @@ class ChatCompletionsAPI(
     }.buffer(Channel.UNLIMITED)
 
 
-    private fun buildChatCompletionRequest(
+    internal fun buildChatCompletionRequest(
         messages: List<UIMessage>,
         params: TextGenerationParams,
         providerSetting: ProviderSetting.OpenAI,
@@ -869,14 +869,21 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
+    internal fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
         if (jsonObject == null) return null
+        val promptTokens = jsonObject["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: 0
+        val cachedTokens = jsonObject["prompt_cache_hit_tokens"]?.jsonPrimitive?.intOrNull
+            ?: jsonObject["prompt_tokens_details"]?.jsonObjectOrNull
+                ?.get("cached_tokens")?.jsonPrimitive?.intOrNull
+            ?: 0
+        val cacheMissTokens = jsonObject["prompt_cache_miss_tokens"]?.jsonPrimitive?.intOrNull
+            ?: (promptTokens - cachedTokens).coerceAtLeast(0)
         return TokenUsage(
-            promptTokens = jsonObject["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
+            promptTokens = promptTokens,
             completionTokens = jsonObject["completion_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
             totalTokens = jsonObject["total_tokens"]?.jsonPrimitive?.intOrNull ?: 0,
-            cachedTokens = jsonObject["prompt_tokens_details"]?.jsonObjectOrNull?.get("cached_tokens")?.jsonPrimitive?.intOrNull
-                ?: 0
+            cachedTokens = cachedTokens,
+            cacheMissTokens = cacheMissTokens,
         )
     }
 

@@ -7,6 +7,7 @@
 package me.rerere.rikkahub.data.service
 
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 
@@ -114,3 +115,6 @@ internal fun assembleProactiveRequestMessages(
         add(processedDynamicUserMessage)
     }
 }
+
+internal fun stabilizeProactiveTools(tools: List<Tool>): List<Tool> =
+    tools.sortedBy { it.name }
