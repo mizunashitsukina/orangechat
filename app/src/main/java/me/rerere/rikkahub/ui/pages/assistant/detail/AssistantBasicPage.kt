@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -21,6 +23,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -28,6 +31,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.ai.provider.ModelType
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
@@ -52,6 +57,7 @@ import me.rerere.rikkahub.ui.components.ui.Select
 import me.rerere.rikkahub.ui.components.ui.TagsInput
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.hooks.heroAnimation
+import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.toFixed
 import org.koin.androidx.compose.koinViewModel
@@ -61,7 +67,11 @@ import kotlin.uuid.Uuid
 import me.rerere.rikkahub.data.model.Tag as DataTag
  
 @Composable
-fun AssistantBasicPage(id: String) {
+fun AssistantBasicPage(
+    id: String,
+    focusWorkspaceBinding: Boolean = false,
+) {
+    val navController = LocalNavController.current
     val vm: AssistantDetailVM = koinViewModel(
         parameters = {
             parametersOf(id)
@@ -96,11 +106,14 @@ fun AssistantBasicPage(id: String) {
             tags = tags,
             workspaces = workspaces,
             onUpdate = { vm.update(it) },
-            vm = vm
+            vm = vm,
+            onOpenWorkspace = { workspaceId ->
+                navController.navigate(Screen.WorkspaceFiles(workspaceId))
+            },
+            focusWorkspaceBinding = focusWorkspaceBinding,
         )
     }
 }
- 
 @Composable
 internal fun AssistantBasicContent(
     modifier: Modifier = Modifier,
@@ -109,8 +122,17 @@ internal fun AssistantBasicContent(
     tags: List<DataTag>,
     workspaces: List<WorkspaceEntity>,
     onUpdate: (Assistant) -> Unit,
-    vm: AssistantDetailVM
+    vm: AssistantDetailVM,
+    onOpenWorkspace: (String) -> Unit = {},
+    focusWorkspaceBinding: Boolean = false,
 ) {
+    val workspaceBindingRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(focusWorkspaceBinding, assistant.id) {
+        if (focusWorkspaceBinding) {
+            workspaceBindingRequester.bringIntoView()
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -191,12 +213,15 @@ internal fun AssistantBasicContent(
                 description = {
                     Text(stringResource(R.string.assistant_page_workspace_binding_desc))
                 },
-                modifier = Modifier.padding(8.dp),
+                modifier = Modifier
+                    .bringIntoViewRequester(workspaceBindingRequester)
+                    .padding(8.dp),
             ) {
                 val options = remember(workspaces) { listOf<WorkspaceEntity?>(null) + workspaces }
+                val boundWorkspace = workspaces.find { it.id == assistant.workspaceId?.toString() }
                 Select(
                     options = options,
-                    selectedOption = workspaces.find { it.id == assistant.workspaceId?.toString() },
+                    selectedOption = boundWorkspace,
                     onOptionSelected = { selected ->
                         onUpdate(
                             assistant.copy(
@@ -207,6 +232,14 @@ internal fun AssistantBasicContent(
                     optionToString = { it?.name ?: stringResource(R.string.workspace_no_binding) },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (boundWorkspace != null) {
+                    OutlinedButton(
+                        onClick = { onOpenWorkspace(boundWorkspace.id) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.assistant_page_open_workspace))
+                    }
+                }
             }
  
             HorizontalDivider()
@@ -576,4 +609,3 @@ internal fun AssistantBasicContent(
         }
     }
 }
- 

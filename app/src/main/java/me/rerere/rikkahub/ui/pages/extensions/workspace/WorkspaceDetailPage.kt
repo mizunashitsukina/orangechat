@@ -92,14 +92,17 @@ import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
 @Composable
-fun WorkspaceDetailPage(id: String) {
+fun WorkspaceDetailPage(
+    id: String,
+    initialPage: Int = 0,
+) {
     val navController = LocalNavController.current
     val toaster = LocalToaster.current
     val context = LocalContext.current
     val vm: WorkspaceDetailVM = koinViewModel(parameters = { parametersOf(id) })
     val state by vm.state.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    val pagerState = rememberPagerState { 2 }
+    val pagerState = rememberPagerState(initialPage = initialPage.coerceIn(0, 1)) { 2 }
     val scope = rememberCoroutineScope()
 
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
@@ -212,7 +215,19 @@ fun WorkspaceDetailPage(id: String) {
                     state = state,
                     onSwitchArea = { vm.switchArea(it) },
                     onNavigateUp = { vm.navigateUp() },
-                    onOpen = { vm.navigateTo(it.path) },
+                    onOpen = { entry ->
+                        if (entry.isDirectory) {
+                            vm.navigateTo(entry.path)
+                        } else {
+                            navController.navigate(
+                                Screen.WorkspaceFilePreview(
+                                    id = id,
+                                    area = state.area.name,
+                                    path = entry.path,
+                                )
+                            )
+                        }
+                    },
                     onDelete = { deleteTarget = it },
                     onExport = { entry ->
                         exportTarget = entry
@@ -357,11 +372,7 @@ private fun WorkspaceFilesPage(
             items(state.files, key = { it.path }) { entry ->
                 FileRow(
                     entry = entry,
-                    onClick = {
-                        if (entry.isDirectory) {
-                            onOpen(entry)
-                        }
-                    },
+                    onClick = { onOpen(entry) },
                     onDelete = { onDelete(entry) },
                     onExport = { onExport(entry) },
                     onShare = { onShare(entry) },

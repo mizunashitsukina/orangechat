@@ -123,6 +123,7 @@ import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesPage
 import me.rerere.rikkahub.ui.pages.extensions.SkillDetailPage
 import me.rerere.rikkahub.ui.pages.extensions.SkillsPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceDetailPage
+import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceFilePreviewPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspacePage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceTerminalPage
 import me.rerere.rikkahub.ui.pages.favorite.FavoritePage
@@ -493,7 +494,10 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             entry<Screen.AssistantBasic> { key ->
-                                AssistantBasicPage(key.id)
+                                AssistantBasicPage(
+                                    id = key.id,
+                                    focusWorkspaceBinding = key.focusWorkspaceBinding,
+                                )
                             }
 
                             entry<Screen.AssistantPrompt> { key ->
@@ -665,6 +669,14 @@ entry<Screen.Extensions> {
 
                             entry<Screen.WorkspaceDetail> { key ->
                                 WorkspaceDetailPage(key.id)
+                            }
+
+                            entry<Screen.WorkspaceFiles> { key ->
+                                WorkspaceDetailPage(key.id, initialPage = 1)
+                            }
+
+                            entry<Screen.WorkspaceFilePreview> { key ->
+                                WorkspaceFilePreviewPage(key.id, key.area, key.path)
                             }
 
                             entry<Screen.WorkspaceTerminal> { key ->
@@ -923,7 +935,10 @@ sealed interface Screen : NavKey {
     data class AssistantDetail(val id: String) : Screen
 
     @Serializable
-    data class AssistantBasic(val id: String) : Screen
+    data class AssistantBasic(
+        val id: String,
+        val focusWorkspaceBinding: Boolean = false,
+    ) : Screen
 
     @Serializable
     data class AssistantPrompt(val id: String) : Screen
@@ -1053,6 +1068,16 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data class WorkspaceDetail(val id: String) : Screen
+
+    @Serializable
+    data class WorkspaceFiles(val id: String) : Screen
+
+    @Serializable
+    data class WorkspaceFilePreview(
+        val id: String,
+        val area: String,
+        val path: String,
+    ) : Screen
 
     @Serializable
     data class WorkspaceTerminal(val id: String) : Screen
