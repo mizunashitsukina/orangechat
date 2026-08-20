@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -43,12 +44,14 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.Files02
+import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Package
@@ -61,6 +64,7 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.ui.components.ui.ExtensionSelector
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionCamera
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
@@ -71,6 +75,7 @@ import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalProviders
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.hooks.ChatInputState
+import org.koin.compose.koinInject
 
 @Composable
 internal fun FilesPicker(
@@ -97,6 +102,15 @@ internal fun FilesPicker(
     val providers = LocalProviders.current
     val mcpServers = LocalMcpServers.current
     val provider = currentChatModel?.findProvider(providers = providers)
+    val navController = LocalNavController.current
+    val workspaceRepository = koinInject<WorkspaceRepository>()
+    val workspaceFlow = remember(workspaceRepository) { workspaceRepository.listFlow() }
+    val workspaces by workspaceFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val workspaceState = resolveWorkspacePanelState(
+        conversationAssistantId = conversation.assistantId.toString(),
+        assistants = settings.assistants,
+        workspaces = workspaces,
+    )
 
     Column(
         modifier = Modifier
@@ -123,6 +137,48 @@ internal fun FilesPicker(
 
         HorizontalDivider(
             modifier = Modifier.fillMaxWidth()
+        )
+
+        ListItem(
+            leadingContent = {
+                Icon(
+                    imageVector = HugeIcons.Folder01,
+                    contentDescription = stringResource(R.string.extensions_page_workspace),
+                )
+            },
+            headlineContent = {
+                Text(stringResource(R.string.extensions_page_workspace))
+            },
+            trailingContent = {
+                Text(
+                    text = when (workspaceState) {
+                        is WorkspacePanelState.Available -> workspaceState.workspaceName
+                        is WorkspacePanelState.Unbound -> stringResource(R.string.workspace_no_binding)
+                        is WorkspacePanelState.Unavailable -> stringResource(R.string.workspace_unavailable)
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            modifier = Modifier
+                .clip(MaterialTheme.shapes.large)
+                .clickable {
+                    onDismiss()
+                    when (val destination = workspaceState.destination()) {
+                        is WorkspacePanelDestination.Files -> {
+                            navController.navigate(Screen.WorkspaceFiles(destination.workspaceId))
+                        }
+
+                        is WorkspacePanelDestination.Binding -> {
+                            navController.navigate(
+                                Screen.AssistantBasic(
+                                    id = destination.assistantId,
+                                    focusWorkspaceBinding = true,
+                                )
+                            )
+                        }
+                    }
+                },
         )
 
         if (mcpServers.isNotEmpty()) {

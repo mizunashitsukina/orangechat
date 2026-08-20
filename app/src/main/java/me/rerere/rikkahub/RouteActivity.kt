@@ -494,7 +494,10 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             entry<Screen.AssistantBasic> { key ->
-                                AssistantBasicPage(key.id)
+                                AssistantBasicPage(
+                                    id = key.id,
+                                    focusWorkspaceBinding = key.focusWorkspaceBinding,
+                                )
                             }
 
                             entry<Screen.AssistantPrompt> { key ->
@@ -932,7 +935,10 @@ sealed interface Screen : NavKey {
     data class AssistantDetail(val id: String) : Screen
 
     @Serializable
-    data class AssistantBasic(val id: String) : Screen
+    data class AssistantBasic(
+        val id: String,
+        val focusWorkspaceBinding: Boolean = false,
+    ) : Screen
 
     @Serializable
     data class AssistantPrompt(val id: String) : Screen

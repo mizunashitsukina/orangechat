@@ -409,6 +409,7 @@
   <string name="assistant_page_workspace_binding_desc">Bind a workspace to enable file/shell tools for this assistant</string>
   <string name="assistant_page_open_workspace">Open workspace</string>
   <string name="workspace_no_binding">No binding</string>
+  <string name="workspace_unavailable">Workspace unavailable</string>
   <string name="workspace_page_title">Workspaces</string>
   <string name="workspace_page_empty_title">No workspaces yet</string>
   <string name="workspace_page_empty_hint">Create a workspace to provide an isolated file area and shell for assistants</string>

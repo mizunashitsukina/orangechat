@@ -1118,6 +1118,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="assistant_page_workspace_binding_desc">绑定工作区以启用该助手的文件/Shell 工具</string>
   <string name="assistant_page_open_workspace">打开工作区</string>
   <string name="workspace_no_binding">未绑定</string>
+  <string name="workspace_unavailable">工作区不可用</string>
   <string name="workspace_page_title">工作区</string>
   <string name="workspace_page_empty_title">暂无工作区</string>
   <string name="workspace_page_empty_hint">创建工作区以提供隔离的文件区和 Shell 供助手使用</string>

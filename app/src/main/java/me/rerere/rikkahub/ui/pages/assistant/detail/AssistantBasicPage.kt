@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
@@ -29,6 +31,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,7 +67,10 @@ import kotlin.uuid.Uuid
 import me.rerere.rikkahub.data.model.Tag as DataTag
  
 @Composable
-fun AssistantBasicPage(id: String) {
+fun AssistantBasicPage(
+    id: String,
+    focusWorkspaceBinding: Boolean = false,
+) {
     val navController = LocalNavController.current
     val vm: AssistantDetailVM = koinViewModel(
         parameters = {
@@ -104,6 +110,7 @@ fun AssistantBasicPage(id: String) {
             onOpenWorkspace = { workspaceId ->
                 navController.navigate(Screen.WorkspaceFiles(workspaceId))
             },
+            focusWorkspaceBinding = focusWorkspaceBinding,
         )
     }
 }
@@ -117,7 +124,15 @@ internal fun AssistantBasicContent(
     onUpdate: (Assistant) -> Unit,
     vm: AssistantDetailVM,
     onOpenWorkspace: (String) -> Unit = {},
+    focusWorkspaceBinding: Boolean = false,
 ) {
+    val workspaceBindingRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(focusWorkspaceBinding, assistant.id) {
+        if (focusWorkspaceBinding) {
+            workspaceBindingRequester.bringIntoView()
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -198,7 +213,9 @@ internal fun AssistantBasicContent(
                 description = {
                     Text(stringResource(R.string.assistant_page_workspace_binding_desc))
                 },
-                modifier = Modifier.padding(8.dp),
+                modifier = Modifier
+                    .bringIntoViewRequester(workspaceBindingRequester)
+                    .padding(8.dp),
             ) {
                 val options = remember(workspaces) { listOf<WorkspaceEntity?>(null) + workspaces }
                 val boundWorkspace = workspaces.find { it.id == assistant.workspaceId?.toString() }
