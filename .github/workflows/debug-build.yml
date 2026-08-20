@@ -50,12 +50,53 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Prepare Debug keystore
+      - name: Prepare stable or ephemeral Debug signing
+        id: debug-signing
         shell: bash
+        env:
+          CI_DEBUG_KEYSTORE_BASE64: ${{ secrets.CI_DEBUG_KEYSTORE_BASE64 }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_STORE_PASSWORD: ${{ secrets.CI_DEBUG_STORE_PASSWORD }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
+          IS_FORK_PR: >-
+            ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
-          if [[ ! -f app/debug.keystore ]]; then
+          set -euo pipefail
+          present=0
+          for value in \
+            "$CI_DEBUG_KEYSTORE_BASE64" \
+            "$CI_DEBUG_KEY_ALIAS" \
+            "$CI_DEBUG_STORE_PASSWORD" \
+            "$CI_DEBUG_KEY_PASSWORD"; do
+            [[ -n "$value" ]] && present=$((present + 1))
+          done
+
+          if [[ "$present" -eq 4 ]]; then
+            keystore_path="$RUNNER_TEMP/orangechat-ci-debug.jks"
+            umask 077
+            if ! printf '%s' "$CI_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"; then
+              rm -f -- "$keystore_path"
+              echo "::error::Failed to restore the dedicated CI Debug keystore."
+              exit 1
+            fi
+            chmod 600 "$keystore_path"
+            if ! keytool -list \
+              -keystore "$keystore_path" \
+              -storetype JKS \
+              -storepass:env CI_DEBUG_STORE_PASSWORD \
+              -alias "$CI_DEBUG_KEY_ALIAS" >/dev/null 2>&1; then
+              rm -f -- "$keystore_path"
+              echo "::error::The dedicated CI Debug keystore could not be validated."
+              exit 1
+            fi
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+            echo "keystore_path=$keystore_path" >> "$GITHUB_OUTPUT"
+            echo "Using dedicated stable CI Debug signing."
+          elif [[ "$present" -eq 0 && "$IS_FORK_PR" == "true" ]]; then
+            keystore_path="$GITHUB_WORKSPACE/app/debug.keystore"
             keytool -genkeypair \
-              -keystore app/debug.keystore \
+              -keystore "$keystore_path" \
               -storepass android \
               -alias androiddebugkey \
               -keypass android \
@@ -63,9 +104,21 @@ jobs:
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+            echo "keystore_path=$keystore_path" >> "$GITHUB_OUTPUT"
+            echo "::warning::Fork PR build uses an ephemeral Debug signature;" \
+              "its APK does not support stable overwrite installation."
+          else
+            echo "::error::Dedicated CI Debug signing secrets are incomplete or unavailable for this trusted build."
+            exit 1
           fi
 
       - name: Run security regression tests
+        env:
+          CI_DEBUG_KEYSTORE_PATH: ${{ steps.debug-signing.outputs.keystore_path }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_STORE_PASSWORD: ${{ secrets.CI_DEBUG_STORE_PASSWORD }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest \
@@ -76,21 +129,94 @@ jobs:
             --tests "me.rerere.rikkahub.data.sync.BackupContainerTest" \
             --tests "me.rerere.rikkahub.data.sync.LocalBackupServiceTest" \
             --tests "me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigratorTest" \
-            --tests "me.rerere.rikkahub.ui.pages.backup.tabs.BackupImportErrorMappingTest"
+            --tests "me.rerere.rikkahub.ui.pages.backup.tabs.BackupImportErrorMappingTest" \
+            --tests "me.rerere.rikkahub.data.ai.mcp.LegacyMcpToolCompatibilityTest"
 
       - name: Assemble Debug APK
+        env:
+          CI_DEBUG_KEYSTORE_PATH: ${{ steps.debug-signing.outputs.keystore_path }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_STORE_PASSWORD: ${{ secrets.CI_DEBUG_STORE_PASSWORD }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
+
+      - name: Verify Debug APK identity and signing certificate
+        id: verify-debug-signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$sdk_root" ]]; then
+            echo "Android SDK root is unavailable." >&2
+            exit 1
+          fi
+          apksigner="$(
+            find "$sdk_root/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner -print |
+              sort -V |
+              tail -n 1
+          )"
+          aapt="$(find "$sdk_root/build-tools" -mindepth 2 -maxdepth 2 -type f -name aapt -print | sort -V | tail -n 1)"
+          if [[ ! -x "$apksigner" || ! -x "$aapt" ]]; then
+            echo "Official Android APK verification tools are unavailable." >&2
+            exit 1
+          fi
+
+          mapfile -d '' apks < <(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print0)
+          if [[ "${#apks[@]}" -eq 0 ]]; then
+            echo "No Debug APK was produced." >&2
+            exit 1
+          fi
+
+          fingerprints=()
+          for apk in "${apks[@]}"; do
+            "$apksigner" verify "$apk"
+            fingerprint="$(
+              "$apksigner" verify --print-certs "$apk" 2>&1 |
+                sed -n 's/.*certificate SHA-256 digest:[[:space:]]*//p' |
+                head -n 1
+            )"
+            application_id="$("$aapt" dump badging "$apk" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
+            if [[ -z "$fingerprint" ]]; then
+              echo "Unable to read the Debug APK signing certificate fingerprint." >&2
+              exit 1
+            fi
+            if [[ "$application_id" != "me.rerere.orangechat.debug" ]]; then
+              echo "Unexpected Debug APK applicationId." >&2
+              exit 1
+            fi
+            fingerprints+=("$fingerprint")
+            echo "Debug APK certificate SHA-256: $fingerprint"
+            echo "Debug APK applicationId verified: $application_id"
+          done
+
+          unique_fingerprints="$(printf '%s\n' "${fingerprints[@]}" | sort -u | wc -l | tr -d ' ')"
+          if [[ "$unique_fingerprints" != "1" ]]; then
+            echo "Debug APK splits are not signed by one certificate." >&2
+            exit 1
+          fi
+          echo "certificate_sha256=${fingerprints[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Upload Debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: orangechat-debug-apk
+          name: >-
+            ${{ steps.debug-signing.outputs.stable == 'true' &&
+            'orangechat-debug-apk' || 'orangechat-debug-apk-ephemeral-signing' }}
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Remove temporary Debug signing material
+        if: always()
+        shell: bash
+        run: |
+          keystore_path="${{ steps.debug-signing.outputs.keystore_path }}"
+          if [[ -n "$keystore_path" ]]; then
+            rm -f -- "$keystore_path"
+          fi
 
   api26-backup-crypto:
     runs-on: ubuntu-latest
@@ -129,12 +255,53 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Prepare Debug keystore
+      - name: Prepare stable or ephemeral Debug signing
+        id: debug-signing
         shell: bash
+        env:
+          CI_DEBUG_KEYSTORE_BASE64: ${{ secrets.CI_DEBUG_KEYSTORE_BASE64 }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_STORE_PASSWORD: ${{ secrets.CI_DEBUG_STORE_PASSWORD }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
+          IS_FORK_PR: >-
+            ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
-          if [[ ! -f app/debug.keystore ]]; then
+          set -euo pipefail
+          present=0
+          for value in \
+            "$CI_DEBUG_KEYSTORE_BASE64" \
+            "$CI_DEBUG_KEY_ALIAS" \
+            "$CI_DEBUG_STORE_PASSWORD" \
+            "$CI_DEBUG_KEY_PASSWORD"; do
+            [[ -n "$value" ]] && present=$((present + 1))
+          done
+
+          if [[ "$present" -eq 4 ]]; then
+            keystore_path="$RUNNER_TEMP/orangechat-ci-debug.jks"
+            umask 077
+            if ! printf '%s' "$CI_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"; then
+              rm -f -- "$keystore_path"
+              echo "::error::Failed to restore the dedicated CI Debug keystore."
+              exit 1
+            fi
+            chmod 600 "$keystore_path"
+            if ! keytool -list \
+              -keystore "$keystore_path" \
+              -storetype JKS \
+              -storepass:env CI_DEBUG_STORE_PASSWORD \
+              -alias "$CI_DEBUG_KEY_ALIAS" >/dev/null 2>&1; then
+              rm -f -- "$keystore_path"
+              echo "::error::The dedicated CI Debug keystore could not be validated."
+              exit 1
+            fi
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+            echo "keystore_path=$keystore_path" >> "$GITHUB_OUTPUT"
+            echo "Using dedicated stable CI Debug signing."
+          elif [[ "$present" -eq 0 && "$IS_FORK_PR" == "true" ]]; then
+            keystore_path="$GITHUB_WORKSPACE/app/debug.keystore"
             keytool -genkeypair \
-              -keystore app/debug.keystore \
+              -keystore "$keystore_path" \
               -storepass android \
               -alias androiddebugkey \
               -keypass android \
@@ -142,6 +309,13 @@ jobs:
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+            echo "keystore_path=$keystore_path" >> "$GITHUB_OUTPUT"
+            echo "::warning::Fork PR build uses an ephemeral Debug signature;" \
+              "its APK does not support stable overwrite installation."
+          else
+            echo "::error::Dedicated CI Debug signing secrets are incomplete or unavailable for this trusted build."
+            exit 1
           fi
 
       - name: Locate Android SDK command-line tools
@@ -223,6 +397,11 @@ jobs:
 
       - name: Run API 26 compatibility and database migration tests
         shell: bash
+        env:
+          CI_DEBUG_KEYSTORE_PATH: ${{ steps.debug-signing.outputs.keystore_path }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_STORE_PASSWORD: ${{ secrets.CI_DEBUG_STORE_PASSWORD }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           chmod +x gradlew
@@ -289,3 +468,12 @@ jobs:
           test_classes+=",me.rerere.rikkahub.data.db.migrations.Migration_25_26_Test"
           ./gradlew :app:connectedDebugAndroidTest \
             "-Pandroid.testInstrumentationRunnerArguments.class=$test_classes"
+
+      - name: Remove temporary Debug signing material
+        if: always()
+        shell: bash
+        run: |
+          keystore_path="${{ steps.debug-signing.outputs.keystore_path }}"
+          if [[ -n "$keystore_path" ]]; then
+            rm -f -- "$keystore_path"
+          fi

@@ -68,7 +68,9 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
+import me.rerere.rikkahub.data.ai.mcp.LegacyMcpToolCandidate
 import me.rerere.rikkahub.data.ai.mcp.McpManager
+import me.rerere.rikkahub.data.ai.mcp.buildLegacyMcpToolCompatibility
 import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.ai.tools.SystemTools
 import me.rerere.rikkahub.data.ai.tools.ToolNaming
@@ -848,6 +850,38 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
+            val availableMcpTools = mcpManager.getAllAvailableTools().map { (serverId, mcpTool) ->
+                val toolDefinition = Tool(
+                    name = ToolNaming.buildMcpToolName(serverId, mcpTool.name),
+                    description = mcpTool.description ?: "",
+                    parameters = { mcpTool.inputSchema },
+                    needsApproval = mcpTool.needsApproval,
+                    execute = {
+                        mcpManager.callTool(serverId, mcpTool.name, it.jsonObject)
+                    },
+                )
+                Triple(serverId, mcpTool, toolDefinition)
+            }
+            val requestedLegacyToolNames = conversation.currentMessages
+                .flatMap { message -> message.getTools() }
+                .filterNot { tool -> tool.isExecuted }
+                .map { tool -> tool.toolName }
+            val serverNamesById = settings.mcpServers.associate { server ->
+                server.id to server.commonOptions.name
+            }
+            val legacyMcpToolCompatibility = buildLegacyMcpToolCompatibility(
+                requestedNames = requestedLegacyToolNames,
+                candidates = availableMcpTools.mapNotNull { (serverId, mcpTool, toolDefinition) ->
+                    serverNamesById[serverId]?.let { serverName ->
+                        LegacyMcpToolCandidate(
+                            serverKey = serverId.toString(),
+                            serverName = serverName,
+                            toolName = mcpTool.name,
+                            value = toolDefinition,
+                        )
+                    }
+                },
+            )
 
             // start generating
             generationHandler.generateText(
@@ -875,6 +909,8 @@ class ChatService(
                     add(workspaceReminderTransformer)
                 },
                 outputTransformers = outputTransformers,
+                legacyMcpToolAliases = legacyMcpToolCompatibility.aliases,
+                legacyMcpToolRejections = legacyMcpToolCompatibility.rejections,
                 tools = buildList {
                     if (settings.enableWebSearch) {
                         addAll(createSearchTools(settings))
@@ -903,19 +939,7 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
                             )
                         )
                     }
-                    mcpManager.getAllAvailableTools().forEach { (serverId, tool) ->
-                        add(
-                            Tool(
-                                name = ToolNaming.buildMcpToolName(serverId, tool.name),
-                                description = tool.description ?: "",
-                                parameters = { tool.inputSchema },
-                                needsApproval = tool.needsApproval,
-                                execute = {
-                                    mcpManager.callTool(serverId, tool.name, it.jsonObject)
-                                },
-                            )
-                        )
-                    }
+                    addAll(availableMcpTools.map { it.third })
                     // Plugin tools
                     addAll(pluginToolProvider.getTools())
                 },

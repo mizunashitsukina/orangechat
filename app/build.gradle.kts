@@ -50,6 +50,16 @@ android {
         localProperties.getProperty("storePassword") != null &&
         localProperties.getProperty("keyAlias") != null &&
         localProperties.getProperty("keyPassword") != null
+    val ciDebugKeystorePath = System.getenv("CI_DEBUG_KEYSTORE_PATH")
+    val ciDebugKeyAlias = System.getenv("CI_DEBUG_KEY_ALIAS")
+    val ciDebugStorePassword = System.getenv("CI_DEBUG_STORE_PASSWORD")
+    val ciDebugKeyPassword = System.getenv("CI_DEBUG_KEY_PASSWORD")
+    val hasCiDebugSigning = listOf(
+        ciDebugKeystorePath,
+        ciDebugKeyAlias,
+        ciDebugStorePassword,
+        ciDebugKeyPassword
+    ).all { !it.isNullOrBlank() } && rootProject.file(ciDebugKeystorePath.orEmpty()).isFile
 
     // 构建溯源信息
     val gitCommit = try {
@@ -74,9 +84,17 @@ android {
                 keyPassword = localProperties.getProperty("keyPassword")
             }
         }
-        // 项目内置共享 debug keystore，保证所有机器/开发者构建的 debug 包签名一致，
-        // 避免 ~/.android/debug.keystore 因机器不同导致 adb install -r 覆盖安装失败（Failure [-99]）。
-        // keystore 参数与 Android 默认 debug 签名一致：alias=androiddebugkey, password=android。
+        create("ciDebug") {
+            if (hasCiDebugSigning) {
+                storeFile = rootProject.file(ciDebugKeystorePath!!)
+                storePassword = ciDebugStorePassword
+                keyAlias = ciDebugKeyAlias
+                keyPassword = ciDebugKeyPassword
+                storeType = "JKS"
+            }
+        }
+        // 本地与外部 Fork CI 的普通 Debug 签名回退；该 keystore 可以是临时生成的，
+        // 只有上方独立的 ciDebug 配置用于生成可稳定覆盖安装的可信 CI 测试 APK。
         getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
@@ -102,9 +120,9 @@ android {
         }
         debug {
             applicationIdSuffix = ".debug"
-            // 统一使用项目内置共享 debug keystore；若配置了 release keystore 则改用 release 签名，
-            // 保证不同机器签名一致，避免覆盖安装失败（Failure [-99]）。
-            signingConfig = signingConfigs.getByName(if (hasReleaseSigning) "release" else "debug")
+            // CI 使用与 Release 完全隔离的固定测试签名；没有完整 CI 配置时只允许普通 Debug 签名，
+            // 绝不因为本机存在 Release 凭据而误用正式发布密钥。
+            signingConfig = signingConfigs.getByName(if (hasCiDebugSigning) "ciDebug" else "debug")
             buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
             buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
