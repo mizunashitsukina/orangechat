@@ -338,7 +338,10 @@ class RouteActivity : ComponentActivity() {
         val tts = rememberCustomTtsState()
 
         when (resolveDisclaimerGateState(settings)) {
-            DisclaimerGateState.LOADING -> return
+            DisclaimerGateState.LOADING -> {
+                DisclaimerLoadingScreen()
+                return
+            }
             DisclaimerGateState.REQUIRES_ACCEPTANCE -> {
                 DisclaimerPage(
                     onAccept = {
@@ -906,6 +909,18 @@ entry<Screen.Extensions> {
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun DisclaimerLoadingScreen() {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator()
         }
     }
 }

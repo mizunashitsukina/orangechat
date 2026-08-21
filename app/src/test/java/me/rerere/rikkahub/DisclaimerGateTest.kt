@@ -8,36 +8,44 @@ package me.rerere.rikkahub
 
 import me.rerere.rikkahub.data.datastore.Settings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DisclaimerGateTest {
     @Test
     fun initialDummyWaitsForPersistedSettings() {
-        assertEquals(
-            DisclaimerGateState.LOADING,
-            resolveDisclaimerGateState(Settings.dummy()),
-        )
+        val state = resolveDisclaimerGateState(Settings.dummy())
+
+        assertEquals(DisclaimerGateState.LOADING, state)
+        assertTrue(state.rendersVisibleContent)
+        assertFalse(state.allowsAcceptanceAction)
+        assertFalse(state.exposesMainContent)
     }
 
     @Test
     fun firstInstallRequiresAcceptanceAfterSettingsLoad() {
-        assertEquals(
-            DisclaimerGateState.REQUIRES_ACCEPTANCE,
-            resolveDisclaimerGateState(Settings(disclaimerAccepted = false)),
-        )
+        val state = resolveDisclaimerGateState(Settings(disclaimerAccepted = false))
+
+        assertEquals(DisclaimerGateState.REQUIRES_ACCEPTANCE, state)
+        assertTrue(state.rendersVisibleContent)
+        assertTrue(state.allowsAcceptanceAction)
+        assertFalse(state.exposesMainContent)
     }
 
     @Test
     fun acceptedSettingsProceedAfterColdRestart() {
-        assertEquals(
-            DisclaimerGateState.ACCEPTED,
-            resolveDisclaimerGateState(
-                Settings(
-                    disclaimerAccepted = true,
-                    disclaimerAcceptedAt = 123,
-                )
-            ),
+        val state = resolveDisclaimerGateState(
+            Settings(
+                disclaimerAccepted = true,
+                disclaimerAcceptedAt = 123,
+            )
         )
+
+        assertEquals(DisclaimerGateState.ACCEPTED, state)
+        assertTrue(state.rendersVisibleContent)
+        assertFalse(state.allowsAcceptanceAction)
+        assertTrue(state.exposesMainContent)
     }
 
     @Test
