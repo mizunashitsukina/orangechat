@@ -22,11 +22,9 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +53,8 @@ import me.rerere.hugeicons.stroke.MessageMultiple01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.WechatBotSetting
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.weixin.WeixinBotClient
 import me.rerere.rikkahub.service.WeixinBotService
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -75,6 +75,7 @@ import org.koin.androidx.compose.koinViewModel
 fun SettingWeixinBotPage(vm: SettingVM = koinViewModel()) {
     val context = LocalContext.current
     val client: WeixinBotClient = koinInject()
+    val conversationRepository: ConversationRepository = koinInject()
     val scope = rememberCoroutineScope()
     val settings by vm.settings.collectAsStateWithLifecycle()
     var botSetting by remember(settings) { mutableStateOf(settings.wechatBotSetting) }
@@ -91,6 +92,15 @@ fun SettingWeixinBotPage(vm: SettingVM = koinViewModel()) {
     var loginStatus by remember { mutableStateOf("未登录") }
     var isLoggingIn by remember { mutableStateOf(false) }
     var showEnableRiskDialog by remember { mutableStateOf(false) }
+    var showConversationDialog by remember { mutableStateOf(false) }
+    var showAssistantDialog by remember { mutableStateOf(false) }
+    var isCreatingConversation by remember { mutableStateOf(false) }
+    val conversations by remember(conversationRepository) {
+        conversationRepository.searchConversations("")
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val boundConversation = conversations.firstOrNull { it.id.toString() == botSetting.conversationId }
+    val boundAssistant = settings.assistants.firstOrNull { it.id.toString() == botSetting.assistantId }
+    val bindingIsValid = boundConversation != null && boundConversation.assistantId.toString() == botSetting.assistantId
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -104,6 +114,42 @@ fun SettingWeixinBotPage(vm: SettingVM = koinViewModel()) {
                 WeixinBotService.start(context)
             },
             onDismiss = { showEnableRiskDialog = false }
+        )
+    }
+
+    if (showConversationDialog) {
+        ConversationBindingDialog(
+            conversations = conversations,
+            onSelect = { conversation ->
+                val newSetting = botSetting.copy(
+                    conversationId = conversation.id.toString(),
+                    assistantId = conversation.assistantId.toString(),
+                )
+                update(newSetting)
+                if (newSetting.enabled && newSetting.botToken.isNotBlank()) {
+                    WeixinBotService.start(context)
+                }
+                showConversationDialog = false
+            },
+            onDismiss = { showConversationDialog = false },
+        )
+    }
+
+    if (showAssistantDialog) {
+        AssistantBindingDialog(
+            assistants = settings.assistants,
+            onSelect = { assistant ->
+                update(
+                    botSetting.copy(
+                        enabled = false,
+                        assistantId = assistant.id.toString(),
+                        conversationId = "",
+                    )
+                )
+                WeixinBotService.stop(context)
+                showAssistantDialog = false
+            },
+            onDismiss = { showAssistantDialog = false },
         )
     }
 
@@ -316,6 +362,7 @@ fun SettingWeixinBotPage(vm: SettingVM = koinViewModel()) {
                         trailingContent = {
                             Switch(
                                 checked = botSetting.enabled,
+                                enabled = botSetting.enabled || (bindingIsValid && botSetting.botToken.isNotBlank()),
                                 onCheckedChange = { enabled ->
                                     if (enabled) {
                                         showEnableRiskDialog = true
@@ -330,8 +377,57 @@ fun SettingWeixinBotPage(vm: SettingVM = koinViewModel()) {
                     item(
                         headlineContent = { Text("关联助手") },
                         supportingContent = {
-                            Text("固定使用当前助手: ${settings.getCurrentAssistant().name.ifBlank { "未命名" }}")
-                        }
+                            Text(boundAssistant?.name?.ifBlank { "未命名助手" } ?: "未选择助手")
+                        },
+                        onClick = { showAssistantDialog = true },
+                    )
+                    item(
+                        headlineContent = { Text("绑定对话") },
+                        supportingContent = {
+                            Text(
+                                when {
+                                    botSetting.conversationId.isBlank() -> "未绑定，微信 Bot 不会处理消息"
+                                    boundConversation == null -> "原绑定对话已删除，请重新绑定"
+                                    !bindingIsValid -> "绑定助手与对话不一致，请重新绑定"
+                                    else -> boundConversation.title.ifBlank { "未命名对话" }
+                                }
+                            )
+                        },
+                        onClick = { showConversationDialog = true },
+                    )
+                    item(
+                        headlineContent = { Text("创建微信 Bot 专用对话") },
+                        supportingContent = { Text("当前阶段所有微信联系人共享同一条绑定对话") },
+                        trailingContent = {
+                            FilledTonalButton(
+                                enabled = !isCreatingConversation,
+                                onClick = {
+                                    val assistant = boundAssistant ?: settings.getCurrentAssistant()
+                                    scope.launch {
+                                        isCreatingConversation = true
+                                        try {
+                                            val conversation = Conversation(
+                                                assistantId = assistant.id,
+                                                title = "微信 Bot 专用",
+                                                messageNodes = emptyList(),
+                                            )
+                                            conversationRepository.insertConversation(conversation)
+                                            update(
+                                                botSetting.copy(
+                                                    assistantId = assistant.id.toString(),
+                                                    conversationId = conversation.id.toString(),
+                                                )
+                                            )
+                                            if (botSetting.enabled && botSetting.botToken.isNotBlank()) {
+                                                WeixinBotService.start(context)
+                                            }
+                                        } finally {
+                                            isCreatingConversation = false
+                                        }
+                                    }
+                                },
+                            ) { Text("创建") }
+                        },
                     )
                     if (botSetting.enabled && botSetting.botToken.isBlank()) {
                         item(

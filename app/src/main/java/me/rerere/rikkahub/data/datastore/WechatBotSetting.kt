@@ -18,7 +18,8 @@ import kotlinx.serialization.Serializable
  *
  * 字段:
  *  - [enabled]: 总开关. 开启后启动 WeixinBotService 长轮询.
- *  - [assistantId]: 关联的助手. 留空 = 用当前助手 (settings.getCurrentAssistant()).
+ *  - [assistantId]: 固定关联的助手，与 [conversationId] 指向的对话保持一致。
+ *  - [conversationId]: 固定读写的对话。留空或失效时 Bot 不处理消息。
  *  - [botToken]: 扫码登录后从 iLink 服务器拿到的 Bearer token, 后续所有请求带上.
  *  - [baseUrl]: iLink 服务器地址, 一般是 https://ilinkai.weixin.qq.com, 扫码确认时可能下发不同的 baseurl.
  *  - [botId]: 本机微信号对应的 ilink_bot_id (登录后下发), 仅用于显示/标识.
@@ -28,6 +29,7 @@ import kotlinx.serialization.Serializable
 data class WechatBotSetting(
     val enabled: Boolean = false,
     val assistantId: String = "",
+    val conversationId: String = "",
     val botToken: String = "",
     val baseUrl: String = "https://ilinkai.weixin.qq.com",
     val botId: String = "",
