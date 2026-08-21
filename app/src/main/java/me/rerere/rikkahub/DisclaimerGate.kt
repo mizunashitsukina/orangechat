@@ -8,10 +8,26 @@ package me.rerere.rikkahub
 
 import me.rerere.rikkahub.data.datastore.Settings
 
-internal enum class DisclaimerGateState {
-    LOADING,
-    REQUIRES_ACCEPTANCE,
-    ACCEPTED,
+internal enum class DisclaimerGateState(
+    val rendersVisibleContent: Boolean,
+    val allowsAcceptanceAction: Boolean,
+    val exposesMainContent: Boolean,
+) {
+    LOADING(
+        rendersVisibleContent = true,
+        allowsAcceptanceAction = false,
+        exposesMainContent = false,
+    ),
+    REQUIRES_ACCEPTANCE(
+        rendersVisibleContent = true,
+        allowsAcceptanceAction = true,
+        exposesMainContent = false,
+    ),
+    ACCEPTED(
+        rendersVisibleContent = true,
+        allowsAcceptanceAction = false,
+        exposesMainContent = true,
+    ),
 }
 
 internal fun resolveDisclaimerGateState(settings: Settings): DisclaimerGateState = when {
