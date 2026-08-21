@@ -337,22 +337,23 @@ class RouteActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         val tts = rememberCustomTtsState()
 
-        // 首次启动：未同意免责声明时强制展示
-        if (!settings.disclaimerAccepted) {
-            DisclaimerPage(
-                onAccept = {
-                    scope.launch {
-                        settingsStore.update {
-                            it.copy(
-                                disclaimerAccepted = true,
-                                disclaimerAcceptedAt = (System.currentTimeMillis() / 1000).toInt()
+        when (resolveDisclaimerGateState(settings)) {
+            DisclaimerGateState.LOADING -> return
+            DisclaimerGateState.REQUIRES_ACCEPTANCE -> {
+                DisclaimerPage(
+                    onAccept = {
+                        scope.launch {
+                            settingsStore.acceptDisclaimer(
+                                acceptedAtEpochSeconds = (System.currentTimeMillis() / 1000).toInt()
                             )
                         }
-                    }
-                },
-                onDecline = { finish() }
-            )
-            return
+                    },
+                    onDecline = { finish() }
+                )
+                return
+            }
+
+            DisclaimerGateState.ACCEPTED -> Unit
         }
         val asr = rememberCustomAsrState()
         val eventBus = koinInject<AppEventBus>()
