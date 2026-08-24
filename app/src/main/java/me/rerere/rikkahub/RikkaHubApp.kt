@@ -70,6 +70,7 @@ class RikkaHubApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        StartupTiming.mark("ApplicationOnCreate")
         INSTANCE = this
         startKoin {
             androidLogger()

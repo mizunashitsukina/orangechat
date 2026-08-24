@@ -31,6 +31,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.rikkahub.AppScope
+import me.rerere.rikkahub.StartupTiming
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV1Migration
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV2Migration
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV3Migration
@@ -409,6 +410,7 @@ class SettingsStore(
             )
         }
         .onEach { settings ->
+            StartupTiming.mark("SettingsReady")
             // 只在助手列表变化时才清空 Pebble 模板缓存（assistant 的 messageTemplate 字段决定模板内容）
             // 避免无关设置变化（如显示设置、provider 设置等）触发不必要的模板重新编译
             if (settings.assistants != lastAssistantsForCacheInvalidation) {
