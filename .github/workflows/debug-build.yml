@@ -470,6 +470,21 @@ jobs:
           ./gradlew :app:connectedDebugAndroidTest \
             "-Pandroid.testInstrumentationRunnerArguments.class=$test_classes"
 
+          adb shell am instrument -w \
+            -e class me.rerere.rikkahub.StartupConsentSeedTest \
+            me.rerere.orangechat.debug.test/androidx.test.runner.AndroidJUnitRunner
+
+          package_name="me.rerere.orangechat.debug"
+          component="$package_name/me.rerere.rikkahub.RouteActivity"
+          for run_number in $(seq 1 7); do
+            adb logcat -c
+            startup_output="$(adb shell am start -W -S -n "$component")"
+            echo "STARTUP_RUN=$run_number"
+            printf '%s\n' "$startup_output" | grep -E '^(LaunchState|ThisTime|TotalTime|WaitTime):'
+            adb logcat -d -s OrangeStartupTiming:I | \
+              sed -n 's/.*event=\([A-Za-z]*\) elapsedMs=\([0-9]*\).*/event=\1 elapsedMs=\2/p'
+          done
+
       - name: Remove temporary Debug signing material
         if: always()
         shell: bash
