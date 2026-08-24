@@ -18,8 +18,8 @@ class StartupConsentSeedTest {
         withTimeout(10_000) {
             settingsStore.settingsFlow.first { !it.init }
         }
-        settingsStore.update {
-            copy(disclaimerAccepted = true, disclaimerAcceptedAt = 1)
+        settingsStore.update { settings ->
+            settings.copy(disclaimerAccepted = true, disclaimerAcceptedAt = 1)
         }
         val accepted = withTimeout(10_000) {
             settingsStore.settingsFlow.first { !it.init && it.disclaimerAccepted }
