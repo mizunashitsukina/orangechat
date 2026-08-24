@@ -208,6 +208,7 @@ class RouteActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        StartupTiming.mark("ActivityOnCreate")
         enableEdgeToEdge()
         disableNavigationBarContrast()
         super.onCreate(savedInstanceState)
@@ -228,6 +229,7 @@ class RouteActivity : ComponentActivity() {
         }
 
         setContent {
+            StartupTiming.mark("ComposeRoot")
             RikkahubTheme {
                 setSingletonImageLoaderFactory { context ->
                     ImageLoader.Builder(context)
@@ -339,6 +341,7 @@ class RouteActivity : ComponentActivity() {
 
         when (resolveDisclaimerGateState(settings)) {
             DisclaimerGateState.LOADING -> {
+                StartupTiming.mark("GateLoading")
                 DisclaimerLoadingScreen()
                 return
             }
@@ -356,8 +359,9 @@ class RouteActivity : ComponentActivity() {
                 return
             }
 
-            DisclaimerGateState.ACCEPTED -> Unit
+            DisclaimerGateState.ACCEPTED -> StartupTiming.mark("GateAccepted")
         }
+        StartupTiming.mark("MainComposition")
         val asr = rememberCustomAsrState()
         val eventBus = koinInject<AppEventBus>()
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
