@@ -469,15 +469,13 @@ jobs:
           test_classes="me.rerere.rikkahub.data.sync.BackupContainerAndroidCompatibilityTest"
           test_classes+=",me.rerere.rikkahub.data.db.migrations.Migration_24_29_Test"
           test_classes+=",me.rerere.rikkahub.data.db.migrations.Migration_25_26_Test"
+          test_classes+=",me.rerere.rikkahub.StartupConsentSeedTest"
           ./gradlew :app:connectedDebugAndroidTest \
             "-Pandroid.testInstrumentationRunnerArguments.class=$test_classes"
 
-          adb shell am instrument -w \
-            -e class me.rerere.rikkahub.StartupConsentSeedTest \
-            me.rerere.orangechat.debug.test/androidx.test.runner.AndroidJUnitRunner
-
           package_name="me.rerere.orangechat.debug"
           component="$package_name/me.rerere.rikkahub.RouteActivity"
+          adb shell pm path "$package_name" | grep -q '^package:'
           for run_number in $(seq 1 7); do
             adb logcat -c
             startup_output="$(adb shell am start -W -S -n "$component")"
