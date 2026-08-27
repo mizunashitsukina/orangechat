@@ -122,6 +122,7 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest \
+            --tests "me.rerere.rikkahub.StartupMainFrameProbeTest" \
             --tests "me.rerere.rikkahub.data.ai.RequestLoggingInterceptorTest" \
             --tests "me.rerere.rikkahub.web.WebServerSecurityPolicyTest" \
             --tests "me.rerere.rikkahub.data.sync.BackupArchiveSecurityTest" \
@@ -485,14 +486,16 @@ jobs:
           adb shell am instrument -w \
             -e class me.rerere.rikkahub.StartupConsentSeedTest \
             "$instrumentation"
-          for run_number in $(seq 1 7); do
-            adb logcat -c
-            startup_output="$(adb shell am start -W -S -n "$component")"
-            echo "STARTUP_RUN=$run_number"
-            printf '%s\n' "$startup_output" | grep -E '^(LaunchState|ThisTime|TotalTime|WaitTime):'
-            adb logcat -d -s OrangeStartupTiming:I | \
-              sed -n 's/.*event=\([A-Za-z]*\) elapsedMs=\([0-9]*\).*/event=\1 elapsedMs=\2/p'
-          done
+          python3 -B -m unittest discover -s scripts/diagnostics -p 'test_*.py' -v
+          python3 -B scripts/diagnostics/collect_startup.py --output "$RUNNER_TEMP/startup-diagnostics"
+
+      - name: Upload sanitized startup measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-diagnostics
+          path: ${{ runner.temp }}/startup-diagnostics/
+          if-no-files-found: warn
 
       - name: Remove temporary Debug signing material
         if: always()
