@@ -49,16 +49,28 @@ class StartupCollectorTest(unittest.TestCase):
         self.assertFalse(sequence.complete)
 
     def test_out_of_order_and_duplicate_events_fail(self):
-        for event in ("SettingsReady", "GateAccepted", "MAIN_FIRST_FRAME_VISIBLE"):
+        for event in ("GateAccepted", "MAIN_FIRST_FRAME_VISIBLE"):
             sequence = Sequence()
             sequence.add("ActivityOnCreate", 10)
-            with self.assertRaisesRegex(DiagnosticFailure, "OUT_OF_ORDER expected=ComposeRoot"):
+            with self.assertRaisesRegex(DiagnosticFailure, "OUT_OF_ORDER expected="):
                 sequence.add(event, 20)
         sequence = Sequence()
         sequence.add("ActivityOnCreate", 10)
         sequence.add("ComposeRoot", 20)
         with self.assertRaises(DiagnosticFailure):
             sequence.add("ComposeRoot", 21)
+
+    def test_settings_before_compose_is_preserved_not_fabricated_as_a_wait(self):
+        sequence = Sequence()
+        for event, ms in (("ActivityOnCreate", 735), ("SettingsReady", 853),
+                          ("ComposeRoot", 900), ("GateAccepted", 930),
+                          ("MainComposition", 940), ("MAIN_FIRST_FRAME_VISIBLE", 990)):
+            sequence.add(event, ms)
+        self.assertEqual(sequence.events["SettingsReady"], 853)
+        self.assertEqual(sequence.phases()["COMPOSE_TO_SETTINGS"], -47)
+        self.assertEqual(sequence.critical_path()["SETTINGS_WAIT"], 0)
+        self.assertEqual(sequence.critical_path()["READY_TO_ACCEPTED"], 30)
+        self.assertEqual(sum(sequence.critical_path().values()), 255)
 
     def test_monotonic_clock_required(self):
         sequence = Sequence()
