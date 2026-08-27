@@ -428,6 +428,7 @@ class RouteActivity : ComponentActivity() {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .startupMainFrameProbe()
                         .background(MaterialTheme.colorScheme.background)
                         .let { base ->
                             if (settings.themeId == "pearltide") {
