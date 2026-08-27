@@ -20,7 +20,7 @@ EVENTS = (
     "ActivityOnCreate", "ComposeRoot", "SettingsReady", "GateAccepted",
     "MainComposition", "MAIN_FIRST_FRAME_VISIBLE",
 )
-ALLOWED = frozenset(EVENTS + ("ApplicationOnCreate", "GateLoading"))
+ALLOWED = frozenset(EVENTS + ("ApplicationOnCreate", "GateLoading", "SettingsAlreadyReady"))
 LINE = re.compile(
     r"^I/OrangeStartupTiming\(\s*(\d+)\):\s*"
     r"event=([A-Za-z_]+) elapsedMs=(\d+)\s*$"
@@ -47,12 +47,37 @@ def parse_line(line):
 class Sequence:
     def __init__(self):
         self.events = {}
+        self.pending_settings_snapshot = None
 
     def add(self, event, milliseconds):
         if event == EVENTS[0]:
             self.events = {event: milliseconds}
+            self.pending_settings_snapshot = None
             return
-        if not self.events or event not in EVENTS:
+        if not self.events:
+            return
+        if event == "SettingsAlreadyReady":
+            # Only accept an explicit in-process snapshot AFTER the latest Activity marker.
+            # No pre-Activity log is used to fill a missing event. Its value is the actual
+            # first emission time, not the snapshot time and not a dummy/default setting.
+            if milliseconds > self.events["ActivityOnCreate"]:
+                raise DiagnosticFailure("INVALID_SETTINGS_SNAPSHOT")
+            existing = self.events.get("SettingsReady")
+            if existing is not None and existing != milliseconds:
+                raise DiagnosticFailure("CONFLICTING_SETTINGS_SNAPSHOT")
+            if self.pending_settings_snapshot not in (None, milliseconds):
+                raise DiagnosticFailure("CONFLICTING_SETTINGS_SNAPSHOT")
+            self.events["SettingsReady"] = milliseconds
+            return
+        if event not in EVENTS:
+            return
+        # Concurrent mark/snapshot emission can report the same actual read twice.
+        if event == "SettingsReady" and self.events.get(event) == milliseconds:
+            return
+        if event == "SettingsReady" and milliseconds < self.events["ActivityOnCreate"]:
+            # A worker can finish its log write between the Activity marker and snapshot.
+            # Do not accept it as a milestone without the explicit post-boundary snapshot.
+            self.pending_settings_snapshot = milliseconds
             return
         # DataStore runs concurrently: SettingsReady can precede ComposeRoot. Preserve
         # its real timestamp instead of inventing a wait or changing app initialization.
@@ -66,7 +91,7 @@ class Sequence:
         missing = [name for name in prerequisites[event] if name not in self.events]
         if event in self.events or missing:
             raise DiagnosticFailure("OUT_OF_ORDER expected=" + (",".join(missing) or "UNIQUE_EVENT"))
-        if milliseconds < next(reversed(self.events.values())):
+        if milliseconds < max(self.events.values()):
             raise DiagnosticFailure("NON_MONOTONIC event=" + event)
         self.events[event] = milliseconds
 
