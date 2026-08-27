@@ -477,6 +477,8 @@ jobs:
           ./gradlew :app:installDebug :app:installDebugAndroidTest
           adb shell pm path "$package_name" | grep -q '^package:'
           adb shell pm list instrumentation | grep -Fq "instrumentation:$instrumentation"
+          # Synthetic emulator fixture only; never clear app data between measured launches.
+          adb shell pm clear "$package_name" | tr -d '\r' | grep -Fxq 'Success'
           adb shell am instrument -w \
             -e class me.rerere.rikkahub.StartupConsentSeedTest \
             "$instrumentation"
