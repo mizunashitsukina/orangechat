@@ -54,9 +54,18 @@ class Sequence:
             return
         if not self.events or event not in EVENTS:
             return
-        expected = EVENTS[len(self.events)] if not self.complete else None
-        if event != expected:
-            raise DiagnosticFailure("OUT_OF_ORDER expected=" + (expected or "END"))
+        # DataStore runs concurrently: SettingsReady can precede ComposeRoot. Preserve
+        # its real timestamp instead of inventing a wait or changing app initialization.
+        prerequisites = {
+            "ComposeRoot": ("ActivityOnCreate",),
+            "SettingsReady": ("ActivityOnCreate",),
+            "GateAccepted": ("ComposeRoot", "SettingsReady"),
+            "MainComposition": ("GateAccepted",),
+            "MAIN_FIRST_FRAME_VISIBLE": ("MainComposition",),
+        }
+        missing = [name for name in prerequisites[event] if name not in self.events]
+        if event in self.events or missing:
+            raise DiagnosticFailure("OUT_OF_ORDER expected=" + (",".join(missing) or "UNIQUE_EVENT"))
         if milliseconds < next(reversed(self.events.values())):
             raise DiagnosticFailure("NON_MONOTONIC event=" + event)
         self.events[event] = milliseconds
@@ -75,6 +84,18 @@ class Sequence:
         values = [self.events[event] for event in EVENTS]
         return dict(zip(PHASES, [b - a for a, b in zip(values, values[1:])] +
                         [values[-1] - values[0]]))
+
+    def critical_path(self):
+        self.phases()  # Require a complete real sample.
+        activity, compose, settings, accepted, main, frame = [self.events[event] for event in EVENTS]
+        ready = max(compose, settings)
+        return {
+            "ACTIVITY_TO_COMPOSE": compose - activity,
+            "SETTINGS_WAIT": ready - compose,
+            "READY_TO_ACCEPTED": accepted - ready,
+            "ACCEPTED_TO_MAIN": main - accepted,
+            "MAIN_TO_FIRST_FRAME": frame - main,
+        }
 
 
 def checked_adb(label, *arguments):
@@ -167,7 +188,8 @@ def main():
             print(f"STARTUP_FAILURE run={run} {detail}", flush=True)
             return 1
         phases = sequence.phases()
-        results.append({"run": run, "eventsMs": sequence.events, "phasesMs": phases})
+        results.append({"run": run, "eventsMs": sequence.events, "phasesMs": phases,
+                        "criticalPathMs": sequence.critical_path()})
         print("STARTUP_RESULT " + json.dumps(results[-1], sort_keys=True), flush=True)
     summary = {"runs": results, "medianMs": {
         phase: statistics.median(row["phasesMs"][phase] for row in results) for phase in PHASES
