@@ -81,17 +81,9 @@ class Sequence:
             return
         # DataStore runs concurrently: SettingsReady can precede ComposeRoot. Preserve
         # its real timestamp instead of inventing a wait or changing app initialization.
-        prerequisites = {
-            "ComposeRoot": ("ActivityOnCreate",),
-            "SettingsReady": ("ActivityOnCreate",),
-            "GateAccepted": ("ComposeRoot", "SettingsReady"),
-            "MainComposition": ("GateAccepted",),
-            "MAIN_FIRST_FRAME_VISIBLE": ("MainComposition",),
-        }
-        missing = [name for name in prerequisites[event] if name not in self.events]
-        if event in self.events or missing:
-            raise DiagnosticFailure("OUT_OF_ORDER expected=" + (",".join(missing) or "UNIQUE_EVENT"))
-        if milliseconds < max(self.events.values()):
+        if event in self.events:
+            raise DiagnosticFailure("DUPLICATE event=" + event)
+        if milliseconds < self.events["ActivityOnCreate"]:
             raise DiagnosticFailure("NON_MONOTONIC event=" + event)
         self.events[event] = milliseconds
 
@@ -106,6 +98,15 @@ class Sequence:
     def phases(self):
         if not self.complete:
             raise DiagnosticFailure("MISSING events=" + self.missing)
+        # Cross-thread log delivery is not a clock. Wait for every real milestone,
+        # then validate the actual monotonic timestamps, never infer missing values.
+        ui_events = ("ActivityOnCreate", "ComposeRoot", "GateAccepted",
+                     "MainComposition", "MAIN_FIRST_FRAME_VISIBLE")
+        for previous, current in zip(ui_events, ui_events[1:]):
+            if self.events[current] < self.events[previous]:
+                raise DiagnosticFailure("NON_MONOTONIC event=" + current)
+        if self.events["SettingsReady"] > self.events["GateAccepted"]:
+            raise DiagnosticFailure("NON_MONOTONIC event=SettingsReady")
         values = [self.events[event] for event in EVENTS]
         return dict(zip(PHASES, [b - a for a, b in zip(values, values[1:])] +
                         [values[-1] - values[0]]))
@@ -208,11 +209,11 @@ def main():
     for run in range(1, 8):
         try:
             sequence = collect_round(run, args.output)
+            phases = sequence.phases()
         except (DiagnosticFailure, OSError) as error:
             detail = str(error) if isinstance(error, DiagnosticFailure) else "COLLECTOR_IO_FAILED"
             print(f"STARTUP_FAILURE run={run} {detail}", flush=True)
             return 1
-        phases = sequence.phases()
         results.append({"run": run, "eventsMs": sequence.events, "phasesMs": phases,
                         "criticalPathMs": sequence.critical_path()})
         print("STARTUP_RESULT " + json.dumps(results[-1], sort_keys=True), flush=True)
