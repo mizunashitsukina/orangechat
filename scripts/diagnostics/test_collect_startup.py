@@ -72,6 +72,42 @@ class StartupCollectorTest(unittest.TestCase):
         self.assertEqual(sequence.critical_path()["READY_TO_ACCEPTED"], 30)
         self.assertEqual(sum(sequence.critical_path().values()), 255)
 
+    def test_current_activity_snapshot_preserves_settings_completed_before_activity(self):
+        sequence = Sequence()
+        sequence.add("SettingsReady", 414)  # Buffered pre-boundary events cannot fill the sample.
+        sequence.add("ActivityOnCreate", 422)
+        self.assertNotIn("SettingsReady", sequence.events)
+        sequence.add("SettingsAlreadyReady", 414)  # Fresh snapshot after this onCreate.
+        sequence.add("SettingsReady", 414)  # Identical concurrent log is harmless.
+        for event, ms in (("ComposeRoot", 491), ("GateAccepted", 772),
+                          ("MainComposition", 772), ("MAIN_FIRST_FRAME_VISIBLE", 1400)):
+            sequence.add(event, ms)
+        self.assertEqual(sequence.events["SettingsReady"], 414)
+        self.assertEqual(sequence.phases()["COMPOSE_TO_SETTINGS"], -77)
+        self.assertEqual(sequence.critical_path()["SETTINGS_WAIT"], 0)
+        self.assertEqual(sum(sequence.critical_path().values()), 978)
+
+    def test_old_or_conflicting_snapshots_cannot_fill_new_activity(self):
+        sequence = Sequence()
+        sequence.add("SettingsAlreadyReady", 1)
+        sequence.add("ActivityOnCreate", 20)
+        sequence.add("ComposeRoot", 30)
+        with self.assertRaisesRegex(DiagnosticFailure, "expected=SettingsReady"):
+            sequence.add("GateAccepted", 40)
+        with self.assertRaisesRegex(DiagnosticFailure, "INVALID_SETTINGS_SNAPSHOT"):
+            sequence.add("SettingsAlreadyReady", 21)
+        sequence.add("SettingsAlreadyReady", 10)
+        with self.assertRaisesRegex(DiagnosticFailure, "CONFLICTING_SETTINGS_SNAPSHOT"):
+            sequence.add("SettingsAlreadyReady", 11)
+
+    def test_concurrent_early_settings_log_still_requires_activity_snapshot(self):
+        sequence = Sequence()
+        sequence.add("ActivityOnCreate", 422)
+        sequence.add("SettingsReady", 414)
+        self.assertNotIn("SettingsReady", sequence.events)
+        sequence.add("SettingsAlreadyReady", 414)
+        self.assertEqual(sequence.events["SettingsReady"], 414)
+
     def test_monotonic_clock_required(self):
         sequence = Sequence()
         sequence.add("ActivityOnCreate", 10)
