@@ -48,12 +48,14 @@ class StartupCollectorTest(unittest.TestCase):
         self.assertEqual(sequence.missing, "MAIN_FIRST_FRAME_VISIBLE")
         self.assertFalse(sequence.complete)
 
-    def test_out_of_order_and_duplicate_events_fail(self):
+    def test_incomplete_and_duplicate_events_fail(self):
         for event in ("GateAccepted", "MAIN_FIRST_FRAME_VISIBLE"):
             sequence = Sequence()
             sequence.add("ActivityOnCreate", 10)
-            with self.assertRaisesRegex(DiagnosticFailure, "OUT_OF_ORDER expected="):
-                sequence.add(event, 20)
+            sequence.add(event, 20)
+            self.assertFalse(sequence.complete)
+            with self.assertRaisesRegex(DiagnosticFailure, "MISSING events="):
+                sequence.phases()
         sequence = Sequence()
         sequence.add("ActivityOnCreate", 10)
         sequence.add("ComposeRoot", 20)
@@ -92,8 +94,9 @@ class StartupCollectorTest(unittest.TestCase):
         sequence.add("SettingsAlreadyReady", 1)
         sequence.add("ActivityOnCreate", 20)
         sequence.add("ComposeRoot", 30)
-        with self.assertRaisesRegex(DiagnosticFailure, "expected=SettingsReady"):
-            sequence.add("GateAccepted", 40)
+        sequence.add("GateAccepted", 40)
+        with self.assertRaisesRegex(DiagnosticFailure, "MISSING.*SettingsReady"):
+            sequence.phases()
         with self.assertRaisesRegex(DiagnosticFailure, "INVALID_SETTINGS_SNAPSHOT"):
             sequence.add("SettingsAlreadyReady", 21)
         sequence.add("SettingsAlreadyReady", 10)
@@ -107,6 +110,25 @@ class StartupCollectorTest(unittest.TestCase):
         self.assertNotIn("SettingsReady", sequence.events)
         sequence.add("SettingsAlreadyReady", 414)
         self.assertEqual(sequence.events["SettingsReady"], 414)
+
+    def test_delayed_settings_delivery_is_waited_for_not_inferred(self):
+        sequence = Sequence()
+        for event, ms in (("ActivityOnCreate", 10), ("ComposeRoot", 30),
+                          ("GateAccepted", 70), ("MainComposition", 70),
+                          ("MAIN_FIRST_FRAME_VISIBLE", 100)):
+            sequence.add(event, ms)
+        self.assertFalse(sequence.complete)
+        self.assertEqual(sequence.missing, "SettingsReady")
+        sequence.add("SettingsReady", 20)
+        self.assertTrue(sequence.complete)
+        self.assertEqual(sequence.phases()["COMPOSE_TO_SETTINGS"], -10)
+
+    def test_actual_out_of_order_times_still_fail_after_collection(self):
+        sequence = Sequence()
+        for event, ms in zip(EVENTS, (10, 80, 20, 70, 90, 100)):
+            sequence.add(event, ms)
+        with self.assertRaisesRegex(DiagnosticFailure, "NON_MONOTONIC event=GateAccepted"):
+            sequence.phases()
 
     def test_monotonic_clock_required(self):
         sequence = Sequence()
