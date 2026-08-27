@@ -16,13 +16,17 @@ class StartupConsentSeedTest {
     fun seedAcceptedDisclaimerForColdStartMeasurement() = runBlocking {
         val settingsStore = getKoin().get<SettingsStore>()
         withTimeout(10_000) {
-            settingsStore.settingsFlow.first { !it.init }
+            // The workflow starts this fixture with cleared emulator-only app data.
+            // Application's existing async launch-count write must finish first: it
+            // saves a full Settings snapshot and could otherwise overwrite this seed.
+            settingsStore.settingsFlowRaw.first { !it.init && it.launchCount > 0 }
         }
         settingsStore.update { settings ->
             settings.copy(disclaimerAccepted = true, disclaimerAcceptedAt = 1)
         }
         val accepted = withTimeout(10_000) {
-            settingsStore.settingsFlow.first { !it.init && it.disclaimerAccepted }
+            // Verify the persisted DataStore value, not update()'s optimistic memory value.
+            settingsStore.settingsFlowRaw.first { !it.init && it.disclaimerAccepted }
         }
         assertTrue(accepted.disclaimerAccepted)
     }
