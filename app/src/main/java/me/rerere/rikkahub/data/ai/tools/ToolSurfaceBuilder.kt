@@ -74,7 +74,7 @@ class ToolSurfaceBuilder(
         if (assistant.enabledSkills.isNotEmpty()) {
             addAll(createSkillTools(assistant.enabledSkills, skillManager.listSkills(), skillManager))
         }
-        mcpManager.getAllAvailableTools().forEach { (serverId, tool) ->
+        mcpManager.getAllAvailableTools(assistant.mcpServers).forEach { (serverId, tool) ->
             add(
                 Tool(
                     name = ToolNaming.buildMcpToolName(serverId, tool.name),

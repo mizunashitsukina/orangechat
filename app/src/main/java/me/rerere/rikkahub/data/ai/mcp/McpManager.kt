@@ -51,7 +51,6 @@ import me.rerere.rikkahub.data.ai.mcp.transport.StreamableHttpClientTransport
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
-import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.saveUploadFromBytes
 import me.rerere.rikkahub.utils.JsonInstant
@@ -142,18 +141,9 @@ class McpManager(
         return clients[config.id]?.second
     }
 
-    fun getAllAvailableTools(): List<Pair<Uuid, McpTool>> {
+    fun getAllAvailableTools(enabledServerIds: Set<Uuid>): List<Pair<Uuid, McpTool>> {
         val settings = settingsStore.settingsFlow.value
-        val assistant = settings.getCurrentAssistant()
-        return settings.mcpServers
-            .filter {
-                it.commonOptions.enable && it.id in assistant.mcpServers
-            }
-            .flatMap { server ->
-                server.commonOptions.tools
-                    .filter { tool -> tool.enable }
-                    .map { tool -> server.id to tool }
-            }
+        return selectAvailableMcpTools(settings.mcpServers, enabledServerIds)
     }
 
     suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): List<UIMessagePart> {
@@ -749,6 +739,17 @@ class McpManager(
             message.contains("missing or invalid")
     }
 }
+
+internal fun selectAvailableMcpTools(
+    servers: List<McpServerConfig>,
+    enabledServerIds: Set<Uuid>,
+): List<Pair<Uuid, McpTool>> = servers
+    .filter { server -> server.commonOptions.enable && server.id in enabledServerIds }
+    .flatMap { server ->
+        server.commonOptions.tools
+            .filter { tool -> tool.enable }
+            .map { tool -> server.id to tool }
+    }
 
 internal val McpJson: Json by lazy {
     Json {
