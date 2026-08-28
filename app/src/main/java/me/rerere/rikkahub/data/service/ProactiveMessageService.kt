@@ -928,7 +928,7 @@ class ProactiveMessageTriggerService : android.app.Service(), KoinComponent {
             }
 
             // MCP 工具
-            mcpManager.getAllAvailableTools().forEach { (serverId, tool) ->
+            mcpManager.getAllAvailableTools(assistant.mcpServers).forEach { (serverId, tool) ->
                 add(
                     Tool(
                         name = ToolNaming.buildMcpToolName(serverId, tool.name),

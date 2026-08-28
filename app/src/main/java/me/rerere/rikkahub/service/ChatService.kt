@@ -843,7 +843,8 @@ class ChatService(
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (settings.enableWebSearch || mcpManager.getAllAvailableTools().isNotEmpty()) {
+                val hasMcpTools = mcpManager.getAllAvailableTools(assistant.mcpServers).isNotEmpty()
+                if (settings.enableWebSearch || hasMcpTools) {
                     addError(
                         IllegalStateException(context.getString(R.string.tools_warning)),
                         conversationId,
@@ -855,18 +856,20 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
-            val availableMcpTools = mcpManager.getAllAvailableTools().map { (serverId, mcpTool) ->
-                val toolDefinition = Tool(
-                    name = ToolNaming.buildMcpToolName(serverId, mcpTool.name),
-                    description = mcpTool.description ?: "",
-                    parameters = { mcpTool.inputSchema },
-                    needsApproval = mcpTool.needsApproval,
-                    execute = {
-                        mcpManager.callTool(serverId, mcpTool.name, it.jsonObject)
-                    },
-                )
-                Triple(serverId, mcpTool, toolDefinition)
-            }
+            val availableMcpTools = mcpManager
+                .getAllAvailableTools(assistant.mcpServers)
+                .map { (serverId, mcpTool) ->
+                    val toolDefinition = Tool(
+                        name = ToolNaming.buildMcpToolName(serverId, mcpTool.name),
+                        description = mcpTool.description ?: "",
+                        parameters = { mcpTool.inputSchema },
+                        needsApproval = mcpTool.needsApproval,
+                        execute = {
+                            mcpManager.callTool(serverId, mcpTool.name, it.jsonObject)
+                        },
+                    )
+                    Triple(serverId, mcpTool, toolDefinition)
+                }
             val requestedLegacyToolNames = conversation.currentMessages
                 .flatMap { message -> message.getTools() }
                 .filterNot { tool -> tool.isExecuted }
