@@ -20,7 +20,15 @@ EVENTS = (
     "ActivityOnCreate", "ComposeRoot", "SettingsReady", "GateAccepted",
     "MainComposition", "MAIN_FIRST_FRAME_VISIBLE",
 )
-ALLOWED = frozenset(EVENTS + ("ApplicationOnCreate", "GateLoading", "SettingsAlreadyReady"))
+DETAIL_EVENTS = (
+    "ThemeContent", "LoadingComposition", "LoadingCompositionApplied",
+    "LoadingDrawStart", "LoadingDrawEnd", "LoadingDisposed", "MainStateReady",
+    "MainNavigationReady", "MainSharedTransition", "MainNavDisplay", "MainChatRoute",
+    "MainCompositionApplied", "MainDrawStart", "MainDrawEnd",
+)
+ALLOWED = frozenset(
+    EVENTS + DETAIL_EVENTS + ("ApplicationOnCreate", "GateLoading", "SettingsAlreadyReady")
+)
 LINE = re.compile(
     r"^I/OrangeStartupTiming\(\s*(\d+)\):\s*"
     r"event=([A-Za-z_]+) elapsedMs=(\d+)\s*$"
@@ -47,11 +55,13 @@ def parse_line(line):
 class Sequence:
     def __init__(self):
         self.events = {}
+        self.detail_events = {}
         self.pending_settings_snapshot = None
 
     def add(self, event, milliseconds):
         if event == EVENTS[0]:
             self.events = {event: milliseconds}
+            self.detail_events = {}
             self.pending_settings_snapshot = None
             return
         if not self.events:
@@ -70,6 +80,10 @@ class Sequence:
             self.events["SettingsReady"] = milliseconds
             return
         if event not in EVENTS:
+            if event in DETAIL_EVENTS:
+                if event in self.detail_events:
+                    raise DiagnosticFailure("DUPLICATE event=" + event)
+                self.detail_events[event] = milliseconds
             return
         # Concurrent mark/snapshot emission can report the same actual read twice.
         if event == "SettingsReady" and self.events.get(event) == milliseconds:
@@ -214,7 +228,8 @@ def main():
             detail = str(error) if isinstance(error, DiagnosticFailure) else "COLLECTOR_IO_FAILED"
             print(f"STARTUP_FAILURE run={run} {detail}", flush=True)
             return 1
-        results.append({"run": run, "eventsMs": sequence.events, "phasesMs": phases,
+        results.append({"run": run, "eventsMs": sequence.events,
+                        "detailEventsMs": sequence.detail_events, "phasesMs": phases,
                         "criticalPathMs": sequence.critical_path()})
         print("STARTUP_RESULT " + json.dumps(results[-1], sort_keys=True), flush=True)
     summary = {"runs": results, "medianMs": {

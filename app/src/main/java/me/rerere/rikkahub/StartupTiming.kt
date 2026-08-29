@@ -48,7 +48,9 @@ internal object StartupTiming {
 internal fun Modifier.startupMainFrameProbe(): Modifier {
     val view = LocalView.current
     return drawWithContent {
+        StartupTiming.mark("MainDrawStart")
         drawContent()
+        StartupTiming.mark("MainDrawEnd")
         StartupTiming.mainContentDrawn(view)
     }
 }

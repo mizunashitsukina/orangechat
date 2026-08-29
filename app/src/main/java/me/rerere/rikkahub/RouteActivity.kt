@@ -37,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -231,6 +232,7 @@ class RouteActivity : ComponentActivity() {
         setContent {
             StartupTiming.mark("ComposeRoot")
             RikkahubTheme {
+                StartupTiming.mark("ThemeContent")
                 setSingletonImageLoaderFactory { context ->
                     ImageLoader.Builder(context)
                         .crossfade(true)
@@ -343,6 +345,11 @@ class RouteActivity : ComponentActivity() {
         if (!settings.disclaimerAccepted) {
             if (settings.init) {
                 StartupTiming.mark("GateLoading")
+                StartupTiming.mark("LoadingComposition")
+                DisposableEffect(Unit) {
+                    onDispose { StartupTiming.mark("LoadingDisposed") }
+                }
+                SideEffect { StartupTiming.mark("LoadingCompositionApplied") }
             }
             DisclaimerPage(
                 onAccept = {
@@ -364,6 +371,7 @@ class RouteActivity : ComponentActivity() {
         val asr = rememberCustomAsrState()
         val eventBus = koinInject<AppEventBus>()
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
+        StartupTiming.mark("MainStateReady")
 
         val startScreen = Screen.Chat(
             id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
@@ -377,6 +385,7 @@ class RouteActivity : ComponentActivity() {
         )
 
         val backStack = rememberNavBackStack(startScreen)
+        StartupTiming.mark("MainNavigationReady")
         SideEffect { this@RouteActivity.navStack = backStack }
 
         ShareHandler(backStack)
@@ -403,6 +412,7 @@ class RouteActivity : ComponentActivity() {
         }
 
         SharedTransitionLayout {
+            StartupTiming.mark("MainSharedTransition")
             CompositionLocalProvider(
                 LocalNavController provides Navigator(backStack),
                 LocalSharedTransitionScope provides this,
@@ -418,6 +428,7 @@ class RouteActivity : ComponentActivity() {
                 LocalTTSState provides tts,
                 LocalASRState provides asr,
             ) {
+                SideEffect { StartupTiming.mark("MainCompositionApplied") }
                 Toaster(
                     state = toastState,
                     darkTheme = LocalDarkMode.current,
@@ -441,6 +452,7 @@ class RouteActivity : ComponentActivity() {
                             }
                         }
                 ) {
+                    StartupTiming.mark("MainNavDisplay")
                     NavDisplay(
                         backStack = backStack,
                         entryDecorators = listOf(
@@ -469,6 +481,7 @@ class RouteActivity : ComponentActivity() {
                                 metadata = NavDisplay.transitionSpec { fadeIn() togetherWith fadeOut() }
                                         + NavDisplay.popTransitionSpec { fadeIn() togetherWith fadeOut() }
                             ) { key ->
+                                StartupTiming.mark("MainChatRoute")
                                 ChatPage(
                                     id = Uuid.parse(key.id),
                                     text = key.text,
