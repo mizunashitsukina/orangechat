@@ -7,6 +7,8 @@ class StartupCollectorTest(unittest.TestCase):
     def test_only_fixed_tag_events_and_milliseconds_are_accepted(self):
         self.assertEqual(parse_line("I/OrangeStartupTiming( 42): event=MAIN_FIRST_FRAME_VISIBLE elapsedMs=123"),
                          (42, "MAIN_FIRST_FRAME_VISIBLE", 123))
+        self.assertEqual(parse_line("I/OrangeStartupTiming( 42): event=MainDrawEnd elapsedMs=124"),
+                         (42, "MainDrawEnd", 124))
         for line in (
             "I/OtherTag( 42): event=GateAccepted elapsedMs=1",
             "I/OrangeStartupTiming( 42): event=PRIVATE_MARKER elapsedMs=1",
