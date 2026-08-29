@@ -937,13 +937,20 @@ entry<Screen.Extensions> {
                 .fillMaxSize()
                 .startupLoadingFrameProbe()
                 .background(MaterialTheme.colorScheme.background),
-            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+            DisclaimerPage(onAccept = {}, onDecline = {})
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
         }
     }
 }
