@@ -208,10 +208,9 @@ class SettingsStore(
                 throw exception
             }
         }.map { preferences ->
-            val disclaimerAcceptance = preferences.readDisclaimerAcceptance()
             Settings(
-                disclaimerAccepted = disclaimerAcceptance.accepted,
-                disclaimerAcceptedAt = disclaimerAcceptance.acceptedAtEpochSeconds,
+                disclaimerAccepted = preferences[DISCLAIMER_ACCEPTED] == true,
+                disclaimerAcceptedAt = preferences[DISCLAIMER_ACCEPTED_AT] ?: 0,
                 enableWebSearch = preferences[ENABLE_WEB_SEARCH] == true,
                 favoriteModels = preferences[FAVORITE_MODELS]?.let {
                     JsonInstant.decodeFromString(it)
