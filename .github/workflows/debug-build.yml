@@ -132,13 +132,61 @@ jobs:
             --tests "me.rerere.rikkahub.ui.pages.backup.tabs.BackupImportErrorMappingTest" \
             --tests "me.rerere.rikkahub.data.ai.mcp.LegacyMcpToolCompatibilityTest" \
             --tests "me.rerere.rikkahub.data.ai.mcp.McpToolSelectionTest" \
+            --tests "me.rerere.rikkahub.data.ai.mcp.McpScopeWiringTest" \
             --tests "me.rerere.rikkahub.ui.components.ai.WorkspacePanelStateTest" \
+            --tests "me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceFilePreviewSupportTest" \
             --tests "me.rerere.rikkahub.DisclaimerGateTest" \
             --tests "me.rerere.rikkahub.data.datastore.DisclaimerPersistenceTest" \
             --tests "me.rerere.rikkahub.data.service.FixedConversationBindingTest" \
             --tests "me.rerere.rikkahub.data.service.ProactiveRequestLayoutTest"
           ./gradlew :ai:testDebugUnitTest \
-            --tests "me.rerere.ai.provider.providers.openai.ChatCompletionsAPIProactiveRequestTest"
+            --tests "me.rerere.ai.provider.providers.openai.ChatCompletionsAPIProactiveRequestTest" \
+            --tests "me.rerere.ai.ui.ToolApprovalStateTest"
+          ./gradlew :workspace:testDebugUnitTest \
+            --tests "me.rerere.workspace.WorkspaceManagerPathSecurityTest"
+
+      - name: Summarize acceptance test evidence
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, xml.etree.ElementTree as ET
+          rows = []
+          for module in ("app", "ai", "workspace"):
+              for path in sorted(glob.glob(f"{module}/build/test-results/testDebugUnitTest/TEST-*.xml")):
+                  suite = ET.parse(path).getroot()
+                  rows.append({"class": suite.attrib["name"], **{
+                      key: int(suite.attrib.get(key, "0"))
+                      for key in ("tests", "failures", "errors", "skipped")
+                  }})
+          expected = {
+              "me.rerere.rikkahub.DisclaimerGateTest",
+              "me.rerere.rikkahub.data.datastore.DisclaimerPersistenceTest",
+              "me.rerere.rikkahub.ui.components.ai.WorkspacePanelStateTest",
+              "me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceFilePreviewSupportTest",
+              "me.rerere.workspace.WorkspaceManagerPathSecurityTest",
+              "me.rerere.rikkahub.data.service.FixedConversationBindingTest",
+              "me.rerere.rikkahub.data.service.ProactiveRequestLayoutTest",
+              "me.rerere.ai.provider.providers.openai.ChatCompletionsAPIProactiveRequestTest",
+              "me.rerere.rikkahub.data.ai.mcp.McpToolSelectionTest",
+              "me.rerere.rikkahub.data.ai.mcp.McpScopeWiringTest",
+              "me.rerere.ai.ui.ToolApprovalStateTest",
+          }
+          executed = {row["class"] for row in rows if row["tests"] > row["skipped"]}
+          if not expected <= executed or any(row["failures"] or row["errors"] for row in rows):
+              raise SystemExit("Required acceptance test execution is incomplete or failed")
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "acceptance-test-summary.json"), "w") as out:
+              json.dump(rows, out, indent=2)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("| Test class | Tests | Failed | Errors | Skipped |\n|---|---:|---:|---:|---:|\n")
+              for row in rows:
+                  out.write("| {class} | {tests} | {failures} | {errors} | {skipped} |\n".format(**row))
+          PY
+
+      - name: Upload acceptance test evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-test-results
+          path: ${{ runner.temp }}/acceptance-test-summary.json
+          if-no-files-found: error
 
       - name: Assemble Debug APK
         env:

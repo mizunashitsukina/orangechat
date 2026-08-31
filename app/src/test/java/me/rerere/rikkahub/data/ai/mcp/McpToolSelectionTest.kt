@@ -6,7 +6,12 @@
 
 package me.rerere.rikkahub.data.ai.mcp
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import me.rerere.ai.core.InputSchema
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -64,6 +69,48 @@ class McpToolSelectionTest {
             listOf(enabledServerId to "tool_enabled"),
             selected.map { it.first to it.second.name },
         )
+    }
+
+    @Test
+    fun switchingAssistantsCannotReuseThePreviousToolSelection() {
+        val firstId = Uuid.random()
+        val secondId = Uuid.random()
+        val servers = listOf(server(firstId, "first_tool"), server(secondId, "second_tool"))
+
+        assertEquals(listOf(firstId), selectAvailableMcpTools(servers, setOf(firstId)).map { it.first })
+        assertEquals(listOf(secondId), selectAvailableMcpTools(servers, setOf(secondId)).map { it.first })
+        assertTrue(selectAvailableMcpTools(servers, emptySet()).isEmpty())
+        assertEquals(listOf(firstId), selectAvailableMcpTools(servers, setOf(firstId)).map { it.first })
+    }
+
+    @Test
+    fun nonexistentAssignmentsNeverFallBackToOtherServers() {
+        assertTrue(selectAvailableMcpTools(listOf(server(Uuid.random(), "tool")), setOf(Uuid.random())).isEmpty())
+    }
+
+    @Test
+    fun selectionPreservesApprovalAndAdvertisedParameterConstraints() {
+        // Synthetic schema: proves transparent forwarding, not remote device enforcement.
+        val schema = InputSchema.Obj(
+            properties = Json.parseToJsonElement(
+                """{"strength":{"type":"integer","minimum":0,"maximum":3},
+                    "duration":{"type":"integer","minimum":1,"maximum":5}}"""
+            ).jsonObject,
+            required = listOf("strength", "duration"),
+        )
+        val tool = McpTool(name = "bounded_action", inputSchema = schema, needsApproval = true)
+        val id = Uuid.random()
+        val config = McpServerConfig.StreamableHTTPServer(
+            id = id,
+            commonOptions = McpCommonOptions(tools = listOf(tool)),
+        )
+
+        val selected = selectAvailableMcpTools(listOf(config), setOf(id)).single().second
+
+        assertSame(tool, selected)
+        assertTrue(selected.needsApproval)
+        assertEquals(schema, selected.inputSchema)
+        assertEquals(listOf(tool), config.commonOptions.tools)
     }
 
     private fun server(
