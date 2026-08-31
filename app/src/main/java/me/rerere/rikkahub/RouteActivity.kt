@@ -337,17 +337,17 @@ class RouteActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         val tts = rememberCustomTtsState()
 
-        // 首次启动：未同意免责声明时强制展示
+        if (settings.init) {
+            DisclaimerLoadingScreen()
+            return
+        }
         if (!settings.disclaimerAccepted) {
             DisclaimerPage(
                 onAccept = {
                     scope.launch {
-                        settingsStore.update {
-                            it.copy(
-                                disclaimerAccepted = true,
-                                disclaimerAcceptedAt = (System.currentTimeMillis() / 1000).toInt()
-                            )
-                        }
+                        settingsStore.acceptDisclaimer(
+                            acceptedAtEpochSeconds = (System.currentTimeMillis() / 1000).toInt()
+                        )
                     }
                 },
                 onDecline = { finish() }
@@ -905,6 +905,18 @@ entry<Screen.Extensions> {
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun DisclaimerLoadingScreen() {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator()
         }
     }
 }
