@@ -51,6 +51,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.rikkahub.data.service.MemoryBankService
+import me.rerere.rikkahub.data.service.shouldResetProactiveTimer
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.ToolApprovalState
@@ -411,7 +412,11 @@ class ChatService(
                 // 用户发送消息时重置主动消息计时器（异步执行，不阻塞发消息主流程）
                 try {
                     val proactiveSetting = settings.proactiveMessageSetting
-                    if (proactiveSetting.enabled) {
+                    if (proactiveSetting.enabled && shouldResetProactiveTimer(
+                            proactiveSetting.conversationId,
+                            conversationId,
+                        )
+                    ) {
                         me.rerere.rikkahub.data.service.ProactiveMessageService.resetTimer(context, proactiveSetting)
                     }
                 } catch (e: Exception) {
@@ -838,7 +843,8 @@ class ChatService(
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (settings.enableWebSearch || mcpManager.getAllAvailableTools().isNotEmpty()) {
+                val hasMcpTools = mcpManager.getAllAvailableTools(assistant.mcpServers).isNotEmpty()
+                if (settings.enableWebSearch || hasMcpTools) {
                     addError(
                         IllegalStateException(context.getString(R.string.tools_warning)),
                         conversationId,
@@ -850,18 +856,20 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
-            val availableMcpTools = mcpManager.getAllAvailableTools().map { (serverId, mcpTool) ->
-                val toolDefinition = Tool(
-                    name = ToolNaming.buildMcpToolName(serverId, mcpTool.name),
-                    description = mcpTool.description ?: "",
-                    parameters = { mcpTool.inputSchema },
-                    needsApproval = mcpTool.needsApproval,
-                    execute = {
-                        mcpManager.callTool(serverId, mcpTool.name, it.jsonObject)
-                    },
-                )
-                Triple(serverId, mcpTool, toolDefinition)
-            }
+            val availableMcpTools = mcpManager
+                .getAllAvailableTools(assistant.mcpServers)
+                .map { (serverId, mcpTool) ->
+                    val toolDefinition = Tool(
+                        name = ToolNaming.buildMcpToolName(serverId, mcpTool.name),
+                        description = mcpTool.description ?: "",
+                        parameters = { mcpTool.inputSchema },
+                        needsApproval = mcpTool.needsApproval,
+                        execute = {
+                            mcpManager.callTool(serverId, mcpTool.name, it.jsonObject)
+                        },
+                    )
+                    Triple(serverId, mcpTool, toolDefinition)
+                }
             val requestedLegacyToolNames = conversation.currentMessages
                 .flatMap { message -> message.getTools() }
                 .filterNot { tool -> tool.isExecuted }
@@ -1505,6 +1513,23 @@ addAll(localTools.getTools(assistant.localTools, me.rerere.rikkahub.data.ai.tool
     fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
         val current = getConversationFlow(conversationId).value
         updateConversation(conversationId, update(current))
+    }
+
+    /**
+     * Hydrates a fixed background channel from the database without overwriting another active generation.
+     * The caller may pass the job it already claimed for this conversation.
+     */
+    internal suspend fun hydrateFixedConversation(
+        conversation: Conversation,
+        claimedJob: Job? = null,
+    ) {
+        val session = getOrCreateSession(conversation.id)
+        session.saveMutex.withLock {
+            val activeJob = session.getJob()
+            if (activeJob == null || !activeJob.isActive || activeJob === claimedJob) {
+                updateConversation(conversation.id, conversation)
+            }
+        }
     }
 
     /**

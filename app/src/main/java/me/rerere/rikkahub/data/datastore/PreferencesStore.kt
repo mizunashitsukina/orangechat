@@ -14,6 +14,8 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.pebbletemplates.pebble.PebbleEngine
@@ -418,6 +420,12 @@ class SettingsStore(
         .distinctUntilChanged()
         .toMutableStateFlow(scope, Settings.dummy())
 
+    suspend fun acceptDisclaimer(acceptedAtEpochSeconds: Int) {
+        dataStore.edit { preferences ->
+            preferences.recordDisclaimerAcceptance(acceptedAtEpochSeconds)
+        }
+    }
+
     suspend fun update(settings: Settings) {
         if(settings.init) {
             Log.w(TAG, "Cannot update dummy settings")
@@ -569,6 +577,21 @@ class SettingsStore(
             )
         }
     }
+}
+
+internal data class DisclaimerAcceptance(
+    val accepted: Boolean,
+    val acceptedAtEpochSeconds: Int,
+)
+
+internal fun Preferences.readDisclaimerAcceptance(): DisclaimerAcceptance = DisclaimerAcceptance(
+    accepted = this[SettingsStore.DISCLAIMER_ACCEPTED] == true,
+    acceptedAtEpochSeconds = this[SettingsStore.DISCLAIMER_ACCEPTED_AT] ?: 0,
+)
+
+internal fun MutablePreferences.recordDisclaimerAcceptance(acceptedAtEpochSeconds: Int) {
+    this[SettingsStore.DISCLAIMER_ACCEPTED] = true
+    this[SettingsStore.DISCLAIMER_ACCEPTED_AT] = acceptedAtEpochSeconds
 }
 
 @Serializable

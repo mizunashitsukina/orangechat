@@ -13,6 +13,7 @@ data class TokenUsage(
     val promptTokens: Int = 0,
     val completionTokens: Int = 0,
     val cachedTokens: Int = 0,
+    val cacheMissTokens: Int = 0,
     val totalTokens: Int = 0,
 )
 
@@ -33,10 +34,16 @@ fun TokenUsage?.merge(other: TokenUsage): TokenUsage {
     } else {
         this?.cachedTokens ?: 0
     }
+    val cacheMissTokens = if (other.cacheMissTokens > 0) {
+        other.cacheMissTokens
+    } else {
+        this?.cacheMissTokens ?: 0
+    }
     return TokenUsage(
         promptTokens = promptTokens,
         completionTokens = completionTokens,
         totalTokens = totalTokens,
-        cachedTokens = cachedTokens
+        cachedTokens = cachedTokens,
+        cacheMissTokens = cacheMissTokens,
     )
 }

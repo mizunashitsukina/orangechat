@@ -120,6 +120,7 @@ import me.rerere.rikkahub.utils.openUrl
 import coil3.compose.AsyncImage
 import me.rerere.rikkahub.utils.splitIntoBubbleSegments
 import me.rerere.rikkahub.utils.urlDecode
+import me.rerere.rikkahub.data.model.isHiddenProactiveMessage
 import java.util.Locale
 import kotlin.time.Duration.Companion.milliseconds
  
@@ -145,6 +146,7 @@ fun ChatMessage(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
 ) {
     val message = node.messages[node.selectIndex]
+    if (message.isHiddenProactiveMessage()) return
     val settings = LocalDisplaySettings.current
     val textStyle = LocalTextStyle.current.copy(
         fontSize = LocalTextStyle.current.fontSize * settings.fontSizeRatio,
@@ -291,7 +293,6 @@ fun ChatMessage(
         )
     }
 }
- 
 @OptIn(FlowPreview::class)
 @Composable
 private fun MessagePartsBlock(
@@ -714,7 +715,6 @@ private fun MessagePartsBlock(
         EditedFilesList(parts = parts, assistant = assistant)
     }
 }
- 
 @Composable
 private fun BubbleSurface(
     imagePath: String,
@@ -1036,4 +1036,3 @@ internal fun VoiceMessageBubble(
         }
     }
 }
- 
